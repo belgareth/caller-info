@@ -33,13 +33,13 @@ class LookupActivity : AppCompatActivity() {
         }
 
         sharedText?.let { text ->
-            val sanitizedNumber = text.filter { it.isDigit() || it == '+' }
-            if (sanitizedNumber.isNotEmpty()) {
-                Toast.makeText(this, "Searching $sanitizedNumber...", Toast.LENGTH_SHORT).show()
+            val normalizedNumber = normalizePhoneNumber(text)
+            if (normalizedNumber.isNotEmpty()) {
+                Toast.makeText(this, "Searching $normalizedNumber...", Toast.LENGTH_SHORT).show()
 
                 lifecycleScope.launch {
                     try {
-                        val result = repository.getCallerInfo(sanitizedNumber)
+                        val result = repository.getCallerInfo(normalizedNumber)
                         val message = NotificationHelper.buildNotificationMessage(result)
                         NotificationHelper.showNotification(
                             this@LookupActivity,

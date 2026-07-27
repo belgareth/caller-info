@@ -9,7 +9,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.rakibulcodes.callerinfo"
+        applicationId = "com.rakibulcodes.callerinfo.test"
         minSdk = 29
         targetSdk = 35
         versionCode = 3

@@ -2,6 +2,7 @@ package com.rakibulcodes.callerinfo.data
 
 import android.content.Context
 import android.util.Log
+import com.rakibulcodes.callerinfo.normalizePhoneNumber
 import com.rakibulcodes.callerinfo.data.database.AppDatabase
 import com.rakibulcodes.callerinfo.data.database.CallerInfoEntity
 import com.google.gson.Gson
@@ -54,49 +55,13 @@ class CallerInfoRepository(private val context: Context) {
     }
 
     suspend fun deleteHistoryItem(number: String) {
-        db.callerInfoDao().deleteByNumber(number)
-    }
-
-    fun sanitizeNumber(input: String): String {
-        // 1. Strip everything except digits and '+', ensuring only one leading '+' survives
-        var digits = input.replace(Regex("[^0-9+]"), "")
-        if (digits.isEmpty()) return ""
-        
-        val hasLeadingPlus = digits.startsWith("+")
-        digits = digits.replace("+", "")
-        if (hasLeadingPlus) digits = "+$digits"
-
-        // 2. Convert standard international dialing codes to '+'
-        when {
-            digits.startsWith("00") -> digits = "+" + digits.substring(2)
-            digits.startsWith("011") -> digits = "+" + digits.substring(3)
-        }
-
-        // 3. Smart Default to Bangladesh format for non-international inputs
-        if (!digits.startsWith("+")) {
-            digits = when {
-                digits.startsWith("0880") -> "+" + digits.substring(1) // Catches '0880' typo
-                digits.startsWith("880") -> "+$digits"                 // Catches missing '+'
-                digits.startsWith("0") && digits.length == 11 -> "+88$digits" // Standard local (017...)
-                digits.length == 10 -> "+880$digits"                   // Missing '0' (17...)
-                else -> digits
-            }
-        }
-
-        // 4. Final Validation
-        return when {
-            // Valid BD: Must be exactly 14 chars (+880 + 10 digits), and the 5th char (index 4) must be 1-9
-            digits.startsWith("+880") -> {
-                if (digits.length == 14 && digits[4] in '1'..'9') digits else ""
-            }
-            // Valid International: Starts with '+' followed by 7 to 15 digits (Total length 8 to 16)
-            digits.startsWith("+") -> {
-                if (digits.length in 8..16) digits else ""
-            }
-            // Unrecognized format
-            else -> ""
+        val normalizedNumber = normalizePhoneNumber(number)
+        if (normalizedNumber.isNotEmpty()) {
+            db.callerInfoDao().deleteByNumber(normalizedNumber)
         }
     }
+
+    fun sanitizeNumber(input: String?): String = normalizePhoneNumber(input)
 
     private suspend fun fetchFromTelegram(number: String): CallerInfoEntity = withContext(Dispatchers.IO) {
         if (!telegramManager.isReady()) {

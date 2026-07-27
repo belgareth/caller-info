@@ -94,7 +94,15 @@ class HistoryAdapter(
             override fun getNewListSize(): Int = newItems.size
 
             override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
-                return items[oldItemPosition].number == newItems[newItemPosition].number
+                val oldNumber = items[oldItemPosition].number
+                val newNumber = newItems[newItemPosition].number
+                val oldLookupValue = normalizePhoneNumber(oldNumber)
+                val newLookupValue = normalizePhoneNumber(newNumber)
+                return if (oldLookupValue.isNotEmpty() && newLookupValue.isNotEmpty()) {
+                    oldLookupValue == newLookupValue
+                } else {
+                    oldNumber == newNumber
+                }
             }
 
             override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {

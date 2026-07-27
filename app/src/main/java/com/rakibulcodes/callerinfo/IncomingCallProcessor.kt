@@ -19,14 +19,17 @@ object IncomingCallProcessor {
     private var lastProcessedTime: Long = 0
 
     suspend fun processCall(context: Context, phoneNumber: String) {
+        val normalizedNumber = normalizePhoneNumber(phoneNumber)
+        if (normalizedNumber.isEmpty()) return
+
         // Simple debounce based on time and number to prevent dual-trigger 
         // from CallScreeningService and CallReceiver
         synchronized(this) {
             val now = System.currentTimeMillis()
-            if (phoneNumber == lastProcessedNumber && (now - lastProcessedTime) < 5000) {
+            if (normalizedNumber == lastProcessedNumber && (now - lastProcessedTime) < 5000) {
                 return
             }
-            lastProcessedNumber = phoneNumber
+            lastProcessedNumber = normalizedNumber
             lastProcessedTime = now
         }
 
@@ -36,13 +39,13 @@ object IncomingCallProcessor {
         
         if (!isEnabled) return
 
-        if (lookupKnown || !isNumberInContacts(context, phoneNumber)) {
+        if (lookupKnown || !isNumberInContacts(context, normalizedNumber)) {
             val repository = CallerInfoRepository.getInstance(context)
-            val result = repository.getCallerInfo(phoneNumber)
+            val result = repository.getCallerInfo(normalizedNumber)
             
             if (result.error == "No internet connection") {
                 // Do not show overlay, schedule offline lookup
-                scheduleOfflineLookup(context, phoneNumber)
+                scheduleOfflineLookup(context, normalizedNumber)
             } else if (isCallStillActive(context)) {
                 // Only show overlay while a call is still active.
                 val overlayIntent = Intent(context, CallerOverlayService::class.java).apply {
