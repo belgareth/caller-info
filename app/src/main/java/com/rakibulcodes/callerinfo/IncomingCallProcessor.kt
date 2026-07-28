@@ -15,40 +15,34 @@ import com.rakibulcodes.callerinfo.data.CallerInfoRepository
 
 object IncomingCallProcessor {
 
-    private var lastProcessedNumber: String? = null
-    private var lastProcessedTime: Long = 0
-
-    suspend fun processCall(context: Context, phoneNumber: String) {
-        val incomingCallStartMillis = System.currentTimeMillis()
-        val config = NumberFormattingPreferences.getInstance(context).getConfig()
-        val normalizedNumber = normalizePhoneNumber(phoneNumber, config)
-        if (normalizedNumber.isEmpty()) return
-
-        // Prevent duplicate processing of the same active call.
-        synchronized(this) {
-            val now = System.currentTimeMillis()
-            if (normalizedNumber == lastProcessedNumber && (now - lastProcessedTime) < 5000) {
-                return
-            }
-            lastProcessedNumber = normalizedNumber
-            lastProcessedTime = now
-        }
-
+    suspend fun processCall(
+        context: Context,
+        normalizedNumber: String,
+        incomingCallStartMillis: Long,
+        verificationState: NumberVerificationState,
+        generation: Long,
+        isCurrent: (Long, String) -> Boolean
+    ) {
+        if (!isCurrent(generation, normalizedNumber)) return
         val prefs = context.getSharedPreferences("Settings", Context.MODE_PRIVATE)
         val isEnabled = prefs.getBoolean("enabled", false)
         val lookupKnown = prefs.getBoolean("lookup_known", false)
         
         if (!isEnabled) return
 
-        if (lookupKnown || !isNumberInContacts(context, normalizedNumber)) {
+        val numberInContacts = isNumberInContacts(context, normalizedNumber)
+        if (!isCurrent(generation, normalizedNumber)) return
+
+        if (lookupKnown || !numberInContacts) {
             val repository = CallerInfoRepository.getInstance(context)
-            val result = repository.getCallerInfo(normalizedNumber)
+            val lookupResult = repository.getCallerInfoWithSource(normalizedNumber)
+            val result = lookupResult.callerInfo
+            if (!isCurrent(generation, normalizedNumber)) return
             
             if (result.error == "No internet connection") {
-                // Do not show overlay, schedule offline lookup
                 scheduleOfflineLookup(context, normalizedNumber)
             } else if (isCallStillActive(context)) {
-                // Only show overlay while a call is still active.
+                if (!isCurrent(generation, normalizedNumber)) return
                 val overlayIntent = Intent(context, CallerOverlayService::class.java).apply {
                     putExtra("number", result.number)
                     putExtra("name", result.name)
@@ -58,10 +52,14 @@ object IncomingCallProcessor {
                     putExtra("email", result.email)
                     putExtra("error", result.error)
                     putExtra("incoming_call_start", incomingCallStartMillis)
+                    putExtra("verification_state", verificationState.name)
+                    putExtra("lookup_source", lookupResult.source.name)
+                    putExtra("call_generation", generation)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startService(overlayIntent)
             } else {
+                if (!isCurrent(generation, normalizedNumber)) return
                 val message = NotificationHelper.buildNotificationMessage(result)
                 NotificationHelper.showNotification(context, result.number, message, result = result)
             }

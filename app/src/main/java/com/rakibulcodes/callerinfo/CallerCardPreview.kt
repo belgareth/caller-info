@@ -37,7 +37,9 @@ data class CallerCardPreviewData(
     val name: String,
     val number: String,
     val detail: String,
-    val recentCall: RecentCallInteraction
+    val recentCall: RecentCallInteraction,
+    val verificationState: NumberVerificationState,
+    val lookupSource: CallerLookupSource
 )
 
 fun createCallerCardPreviewData(nowMillis: Long): CallerCardPreviewData =
@@ -48,5 +50,7 @@ fun createCallerCardPreviewData(nowMillis: Long): CallerCardPreviewData =
         recentCall = RecentCallInteraction(
             type = RecentCallType.INCOMING,
             timestampMillis = nowMillis - 60 * 60 * 1000L
-        )
+        ),
+        verificationState = NumberVerificationState.PASSED,
+        lookupSource = CallerLookupSource.LOCAL
     )

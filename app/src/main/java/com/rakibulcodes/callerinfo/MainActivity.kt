@@ -494,6 +494,8 @@ class MainActivity : AppCompatActivity() {
         }
         binding.switchShowPreviousCall.isChecked =
             recentCallPreferences.isEnabled() && recentCallPermissionGranted
+        val lookupSourcePreferences = LookupSourcePreferences.getInstance(this)
+        binding.switchShowLookupSource.isChecked = lookupSourcePreferences.isEnabled()
 
         fun saveNumberFormattingSettings() {
             val callingCode = binding.etCallingCode.text?.toString().orEmpty()
@@ -584,6 +586,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 return@setOnCheckedChangeListener
             }
+        }
+        binding.switchShowLookupSource.setOnCheckedChangeListener { _, isChecked ->
+            lookupSourcePreferences.setEnabled(isChecked)
         }
 
         val historyOptions = arrayOf("100", "1000", "2000", "5000", "10000", "20000", "Unlimited")

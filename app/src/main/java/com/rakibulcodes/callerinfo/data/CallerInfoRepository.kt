@@ -2,6 +2,8 @@ package com.rakibulcodes.callerinfo.data
 
 import android.content.Context
 import android.util.Log
+import com.rakibulcodes.callerinfo.CallerLookupResult
+import com.rakibulcodes.callerinfo.CallerLookupSource
 import com.rakibulcodes.callerinfo.NumberFormattingPreferences
 import com.rakibulcodes.callerinfo.normalizePhoneNumber
 import com.rakibulcodes.callerinfo.data.database.AppDatabase
@@ -24,21 +26,31 @@ class CallerInfoRepository(private val context: Context) {
     private val numberFormattingPreferences = NumberFormattingPreferences.getInstance(context)
 
     suspend fun getCallerInfo(rawNumber: String): CallerInfoEntity {
+        return getCallerInfoWithSource(rawNumber).callerInfo
+    }
+
+    suspend fun getCallerInfoWithSource(rawNumber: String): CallerLookupResult {
         val number = sanitizeNumber(rawNumber)
         if (number.isEmpty()) {
-            return errorEntity(rawNumber.trim(), "Invalid Number")
+            return CallerLookupResult(
+                errorEntity(rawNumber.trim(), "Invalid Number"),
+                CallerLookupSource.LOCAL
+            )
         }
         
         val cached = db.callerInfoDao().getCallerInfo(number)
         if (cached != null && cached.name != "Unknown") {
-            return cached
+            return CallerLookupResult(cached, CallerLookupSource.LOCAL)
         }
 
         if (!isNetworkAvailable()) {
-            return errorEntity(number, "No internet connection")
+            return CallerLookupResult(
+                errorEntity(number, "No internet connection"),
+                CallerLookupSource.LOCAL
+            )
         }
 
-        return fetchFromTelegram(number)
+        return CallerLookupResult(fetchFromTelegram(number), CallerLookupSource.REMOTE)
     }
 
     private fun isNetworkAvailable(): Boolean {

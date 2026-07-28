@@ -96,6 +96,58 @@ class ConfigurationAuditTest {
         assertTrue(activity.contains("refreshAppStatus()"))
     }
 
+    @Test
+    fun screeningResponsePrecedesOptionalProcessing() {
+        val service = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/CallerScreeningService.kt"
+        ).readText()
+        val coordinator = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/CallScreeningSafeguards.kt"
+        ).readText()
+
+        val responseIndex = coordinator.indexOf("responder.respond()")
+        val dispatchIndex = coordinator.indexOf("dispatcher.dispatch()")
+        assertTrue(responseIndex >= 0)
+        assertTrue(dispatchIndex > responseIndex)
+        assertTrue(service.contains(".setDisallowCall(false)"))
+        assertTrue(service.contains(".setRejectCall(false)"))
+        assertTrue(service.contains(".setSilenceCall(false)"))
+        assertFalse(service.contains("Thread.sleep"))
+        assertFalse(service.contains("delay(5000"))
+    }
+
+    @Test
+    fun transientDiagnosticsDoNotChangePersistence() {
+        val source = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/CallerLookupSource.kt"
+        ).readText()
+        val entity = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/data/database/CallerInfoEntity.kt"
+        ).readText()
+        val preferences = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/CallerLookupSource.kt"
+        ).readText()
+
+        assertTrue(source.contains("CONTACT"))
+        assertTrue(source.contains("LOCAL"))
+        assertTrue(source.contains("REMOTE"))
+        assertFalse(entity.contains("CallerLookupSource"))
+        assertFalse(entity.contains("NumberVerificationState"))
+        assertTrue(preferences.contains("\"showLookupSource\""))
+        assertFalse(preferences.contains("putString"))
+    }
+
+    @Test
+    fun messageAccessAndLauncherChangesRemainAbsent() {
+        val manifest = sourceFile("src/main/AndroidManifest.xml").readText()
+        val gradle = sourceFile("build.gradle.kts").readText()
+
+        assertFalse(manifest.contains("READ_SMS"))
+        assertFalse(manifest.contains("Telephony.Sms"))
+        assertTrue(gradle.contains("versionCode = 9"))
+        assertTrue(gradle.contains("versionName = \"1.1.0-test.7\""))
+    }
+
     private fun sourceFile(relativePath: String): File {
         val direct = File(relativePath)
         if (direct.exists()) return direct

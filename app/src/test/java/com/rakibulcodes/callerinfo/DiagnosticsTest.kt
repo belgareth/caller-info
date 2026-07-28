@@ -85,6 +85,8 @@ class DiagnosticsTest {
         assertEquals("+1234567890", preview.number)
         assertEquals(RecentCallType.INCOMING, preview.recentCall.type)
         assertEquals(0L, preview.recentCall.timestampMillis)
+        assertEquals(NumberVerificationState.PASSED, preview.verificationState)
+        assertEquals(CallerLookupSource.LOCAL, preview.lookupSource)
     }
 
     @Test

@@ -42,6 +42,10 @@ class CallerOverlayService : Service() {
     private var recentCallJob: Job? = null
     private var previewDismissJob: Job? = null
     private var presentationId = 0L
+    private var activeCallGeneration: Long? = null
+    private var activeNormalizedNumber: String? = null
+    private var pendingVerificationState = NumberVerificationState.UNAVAILABLE
+    private var pendingLookupSource: CallerLookupSource? = null
     private val presentationState = OverlayPresentationState()
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -60,9 +64,20 @@ class CallerOverlayService : Service() {
                 }
                 return START_NOT_STICKY
             }
+            ACTION_CLEAR_INCOMING_PRESENTATION -> {
+                removeOverlay()
+                return START_NOT_STICKY
+            }
         }
 
         val number = intent?.getStringExtra("number") ?: return START_NOT_STICKY
+        val callGeneration = intent.getLongExtra("call_generation", -1L)
+        if (
+            callGeneration < 0 ||
+            !activeIncomingCallGeneration.isCurrent(callGeneration, number)
+        ) {
+            return START_NOT_STICKY
+        }
         val name = intent.getStringExtra("name")
         val carrier = intent.getStringExtra("carrier")
         val country = intent.getStringExtra("country")
@@ -71,11 +86,25 @@ class CallerOverlayService : Service() {
         val error = intent.getStringExtra("error")
         val incomingCallStartMillis =
             intent.getLongExtra("incoming_call_start", System.currentTimeMillis())
+        val verificationState = intent.getStringExtra("verification_state")
+            .toEnumOrNull<NumberVerificationState>()
+            ?: NumberVerificationState.UNAVAILABLE
+        val lookupSource = intent.getStringExtra("lookup_source")
+            .toEnumOrNull<CallerLookupSource>()
 
-        removeOverlayInternal()
+        removeOverlayInternal(invalidateActiveCall = false)
+        activeCallGeneration = callGeneration
+        activeNormalizedNumber = number
+        pendingVerificationState = verificationState
+        pendingLookupSource = lookupSource
         presentationState.beginRealCall()
         showOverlay(number, name, carrier, country, location, email, error, false)
-        loadRecentCall(number, incomingCallStartMillis, presentationId)
+        loadRecentCall(
+            number,
+            incomingCallStartMillis,
+            presentationId,
+            callGeneration
+        )
         return START_NOT_STICKY
     }
 
@@ -153,6 +182,17 @@ class CallerOverlayService : Service() {
                 view.findViewById<TextView>(R.id.tvName).text = name ?: "Unknown"
                 view.findViewById<View>(R.id.overlayActions).visibility =
                     if (isPreview) View.GONE else View.VISIBLE
+                bindVerificationBadge(view, pendingVerificationState)
+                bindLookupSource(
+                    view = view,
+                    source = pendingLookupSource,
+                    hasCallerInformation = hasDisplayableCallerInformation(
+                        name = name,
+                        carrier = carrier,
+                        email = email,
+                        hasError = error != null
+                    )
+                )
 
                 val carrierText = listOfNotNull(carrier, country).joinToString(" · ")
                 view.findViewById<TextView>(R.id.tvCarrier).text = if (carrierText.isNotEmpty()) carrierText else "Unknown Carrier"
@@ -305,6 +345,8 @@ class CallerOverlayService : Service() {
             name = getString(R.string.preview_sample_caller),
             detail = getString(R.string.preview_only)
         )
+        pendingVerificationState = preview.verificationState
+        pendingLookupSource = preview.lookupSource
         showOverlay(
             number = preview.number,
             name = preview.name,
@@ -365,12 +407,19 @@ class CallerOverlayService : Service() {
         }
     }
 
-    private fun removeOverlayInternal() {
+    private fun removeOverlayInternal(invalidateActiveCall: Boolean = true) {
         recentCallJob?.cancel()
         recentCallJob = null
         previewDismissJob?.cancel()
         previewDismissJob = null
         presentationId++
+        if (invalidateActiveCall) {
+            activeCallGeneration?.let(activeIncomingCallGeneration::invalidate)
+        }
+        activeCallGeneration = null
+        activeNormalizedNumber = null
+        pendingVerificationState = NumberVerificationState.UNAVAILABLE
+        pendingLookupSource = null
         overlayView?.let {
             try {
                 windowManager?.removeView(it)
@@ -388,7 +437,8 @@ class CallerOverlayService : Service() {
     private fun loadRecentCall(
         number: String,
         cutoffMillis: Long,
-        expectedPresentationId: Long
+        expectedPresentationId: Long,
+        expectedGeneration: Long
     ) {
         val view = overlayView ?: return
         val row = view.findViewById<LinearLayout>(R.id.rowRecentCall)
@@ -405,7 +455,10 @@ class CallerOverlayService : Service() {
                     expectedPresentationId = expectedPresentationId,
                     currentPresentationId = presentationId,
                     sameOverlayView = overlayView === view
-                )
+                ) ||
+                !activeIncomingCallGeneration.isCurrent(expectedGeneration, number) ||
+                activeCallGeneration != expectedGeneration ||
+                activeNormalizedNumber != number
             ) {
                 return@launch
             }
@@ -437,6 +490,66 @@ class CallerOverlayService : Service() {
         icon.contentDescription = getString(iconDetails.second)
         text.text = formatRecentCallTime(interaction.timestampMillis)
         view.findViewById<LinearLayout>(R.id.rowRecentCall).visibility = View.VISIBLE
+    }
+
+    private fun bindVerificationBadge(view: View, state: NumberVerificationState) {
+        val row = view.findViewById<LinearLayout>(R.id.rowNumberVerification)
+        val icon = view.findViewById<ImageView>(R.id.ivNumberVerification)
+        val text = view.findViewById<TextView>(R.id.tvNumberVerification)
+        when (visibleNumberVerificationState(state, presentationState.mode == OverlayPresentationMode.REAL_CALL || presentationState.mode == OverlayPresentationMode.PREVIEW)) {
+            NumberVerificationState.PASSED -> {
+                icon.setImageResource(R.drawable.ic_number_verified)
+                icon.imageTintList = ColorStateList.valueOf(
+                    com.google.android.material.color.MaterialColors.getColor(
+                        icon,
+                        com.google.android.material.R.attr.colorPrimary
+                    )
+                )
+                icon.contentDescription = getString(R.string.number_verification_passed_description)
+                text.setText(R.string.number_verified)
+                row.visibility = View.VISIBLE
+            }
+            NumberVerificationState.FAILED -> {
+                icon.setImageResource(R.drawable.ic_number_verification_failed)
+                icon.imageTintList = ColorStateList.valueOf(
+                    com.google.android.material.color.MaterialColors.getColor(
+                        icon,
+                        com.google.android.material.R.attr.colorError
+                    )
+                )
+                icon.contentDescription = getString(R.string.number_verification_failed_description)
+                text.setText(R.string.number_verification_failed)
+                row.visibility = View.VISIBLE
+            }
+            NumberVerificationState.UNAVAILABLE,
+            null -> row.visibility = View.GONE
+        }
+    }
+
+    private fun bindLookupSource(
+        view: View,
+        source: CallerLookupSource?,
+        hasCallerInformation: Boolean
+    ) {
+        val row = view.findViewById<LinearLayout>(R.id.rowLookupSource)
+        val visibleSource = visibleLookupSource(
+            source = source,
+            settingEnabled = LookupSourcePreferences.getInstance(applicationContext).isEnabled(),
+            hasCallerInformation = hasCallerInformation
+        )
+        if (visibleSource == null) {
+            row.visibility = View.GONE
+            return
+        }
+
+        view.findViewById<TextView>(R.id.tvLookupSource).setText(
+            when (visibleSource) {
+                CallerLookupSource.CONTACT -> R.string.lookup_source_contact
+                CallerLookupSource.LOCAL -> R.string.lookup_source_local
+                CallerLookupSource.REMOTE -> R.string.lookup_source_remote
+            }
+        )
+        row.visibility = View.VISIBLE
     }
 
     private fun formatRecentCallTime(timestampMillis: Long): String {
@@ -493,6 +606,8 @@ class CallerOverlayService : Service() {
             "com.rakibulcodes.callerinfo.action.SHOW_CALLER_CARD_PREVIEW"
         private const val ACTION_DISMISS_PREVIEW =
             "com.rakibulcodes.callerinfo.action.DISMISS_CALLER_CARD_PREVIEW"
+        private const val ACTION_CLEAR_INCOMING_PRESENTATION =
+            "com.rakibulcodes.callerinfo.action.CLEAR_INCOMING_PRESENTATION"
         private const val PREVIEW_DURATION_MILLIS = 10_000L
 
         fun showPreview(context: Context) {
@@ -511,5 +626,20 @@ class CallerOverlayService : Service() {
                 // The preview also expires automatically if the app can no longer start services.
             }
         }
+
+        fun clearIncomingPresentation(context: Context, generation: Long) {
+            try {
+                context.startService(
+                    Intent(context, CallerOverlayService::class.java)
+                        .setAction(ACTION_CLEAR_INCOMING_PRESENTATION)
+                        .putExtra("call_generation", generation)
+                )
+            } catch (_: IllegalStateException) {
+                // A stale card cannot be updated because the generation is already invalid.
+            }
+        }
     }
 }
+
+private inline fun <reified T : Enum<T>> String?.toEnumOrNull(): T? =
+    this?.let { value -> enumValues<T>().firstOrNull { it.name == value } }

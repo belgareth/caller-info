@@ -110,4 +110,14 @@
     <string name="preview_sample_caller">Sample caller</string>
     <string name="preview_only">Preview only</string>
     <string name="native_integration_unavailable">Native integration unavailable on this device.</string>
+    <string name="diagnostics">Diagnostics</string>
+    <string name="show_lookup_source">Show lookup source</string>
+    <string name="show_lookup_source_description">Show where caller information was found</string>
+    <string name="lookup_source_contact">Contact</string>
+    <string name="lookup_source_local">Local data</string>
+    <string name="lookup_source_remote">Remote lookup</string>
+    <string name="number_verified">Number verified</string>
+    <string name="number_verification_failed">Number verification failed</string>
+    <string name="number_verification_passed_description">Carrier verification passed for the presented number</string>
+    <string name="number_verification_failed_description">Carrier verification failed for the presented number</string>
 </resources>
