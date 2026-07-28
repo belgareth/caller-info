@@ -12,15 +12,13 @@ android {
         applicationId = "com.rakibulcodes.callerinfo.test"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.1.0-test.5"
+        versionCode = 8
+        versionName = "1.1.0-test.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
         ndk {
-            abiFilters.add("armeabi-v7a")
             abiFilters.add("arm64-v8a")
-            abiFilters.add("x86")
             abiFilters.add("x86_64")
         }
     }

@@ -14,6 +14,7 @@ import org.drinkless.tdlib.TdApi
 class TelegramManager private constructor(private val context: Context) {
 
     private var client: Client? = null
+    private var nativeAvailable = false
     private val _authState = MutableSharedFlow<TdApi.AuthorizationState>(
         replay = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
@@ -30,23 +31,31 @@ class TelegramManager private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("TelegramSettings", Context.MODE_PRIVATE)
 
     init {
-        try {
-            // Try to load the native library. 
-            // The library name might be "tdjni" or similar depending on the packaging.
+        nativeAvailable = try {
             System.loadLibrary("tdjni")
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e("TelegramManager", "Native library tdjni not found: ${e.message}")
+            true
+        } catch (_: UnsatisfiedLinkError) {
+            Log.e("TelegramManager", "Native integration unavailable")
+            false
         }
-        setupClient()
+        if (nativeAvailable) {
+            setupClient()
+        }
     }
 
     private fun setupClient() {
         try {
             client = Client.create(ResultHandler(), null, null)
+        } catch (_: UnsatisfiedLinkError) {
+            nativeAvailable = false
+            client = null
+            Log.e("TelegramManager", "Native integration unavailable")
         } catch (e: Exception) {
             Log.e("TelegramManager", "Failed to create TDLib client: ${e.message}")
         }
     }
+
+    fun isNativeAvailable(): Boolean = nativeAvailable
 
     fun send(query: TdApi.Function<out TdApi.Object>, callback: (TdApi.Object) -> Unit) {
         if (client == null) {

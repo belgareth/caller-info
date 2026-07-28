@@ -17,6 +17,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.GestureDetector
+import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Toast
@@ -63,6 +64,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             Toast.makeText(this, "Call Screening role denied. Automatic Caller ID might not work on Android 10+.", Toast.LENGTH_LONG).show()
         }
+        refreshAppStatus()
     }
 
     private val callLogPermissionLauncher =
@@ -71,6 +73,7 @@ class MainActivity : AppCompatActivity() {
             if (!granted) {
                 showRecentCallPermissionGuidance()
             }
+            refreshAppStatus()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,63 +88,13 @@ class MainActivity : AppCompatActivity() {
         repository = CallerInfoRepository.getInstance(applicationContext)
         telegramManager = TelegramManager.getInstance(applicationContext)
         initializeUI()
+        if (!telegramManager.isNativeAvailable()) {
+            setLoginStatus(getString(R.string.native_integration_unavailable), isError = true)
+        }
         observeTelegramState()
 
         setupNetworkListener()
         checkForUpdates()
-        
-        // Ask for permissions directly on launch
-        requestInitialPermissions()
-    }
-
-    private fun requestInitialPermissions() {
-        val permissions = mutableListOf(
-            android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CONTACTS,
-            android.Manifest.permission.ACCESS_NETWORK_STATE
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        val missingPermissions = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (missingPermissions.isNotEmpty()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                requestPermissions(missingPermissions.toTypedArray(), 101)
-            }
-        } else {
-            // If permissions are there, check for Overlay and Role on launch too
-            checkSpecialPermissions()
-        }
-    }
-
-    private fun checkSpecialPermissions() {
-        if (!hasOverlayPermission()) {
-            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                .setTitle("Overlay Permission")
-                .setMessage("To automatically show Caller ID over other apps during an incoming call, please allow the 'Display over other apps' permission.")
-                .setPositiveButton("Open Settings") { _, _ -> requestOverlayPermission() }
-                .setNegativeButton("Cancel", null)
-                .show()
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roleManager = getSystemService(RoleManager::class.java)
-            if (roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true &&
-                !roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)) {
-                
-                com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                    .setTitle("Default Caller ID App")
-                    .setMessage("On Android 10+, you need to set Caller Info as your Call Screening app to automatically identify incoming numbers.")
-                    .setPositiveButton("Set as Default") { _, _ ->
-                        val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING)
-                        roleRequestLauncher.launch(intent)
-                    }
-                    .setNegativeButton("Maybe Later", null)
-                    .show()
-            }
-        }
     }
 
     private fun setupNetworkListener() {
@@ -165,6 +118,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (::binding.isInitialized) {
+            binding.etNumberFormattingPreview.text?.clear()
+            binding.tvNumberFormattingPreviewResult.text = ""
+        }
+        CallerOverlayService.dismissPreview(applicationContext)
         super.onDestroy()
         networkCallback?.let {
             val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -231,7 +189,7 @@ class MainActivity : AppCompatActivity() {
                 message.append("• $note\n")
             }
         } else {
-            message.append("\nPlease update to continue using Caller Info.")
+            message.append("\nPlease update to continue using Caller Info Test.")
         }
 
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
@@ -434,7 +392,7 @@ class MainActivity : AppCompatActivity() {
     private fun applySectionForNavItem(itemId: Int): Boolean {
         when (itemId) {
             R.id.nav_lookup -> {
-                binding.toolbar.title = "Caller Info"
+                binding.toolbar.title = getString(R.string.app_name)
                 showSection(binding.searchLayout)
                 invalidateOptionsMenu()
                 return true
@@ -588,6 +546,22 @@ class MainActivity : AppCompatActivity() {
         binding.switchAcceptWithoutPrefix.setOnCheckedChangeListener { _, _ ->
             saveNumberFormattingSettings()
         }
+        binding.etNumberFormattingPreview.doAfterTextChanged {
+            binding.tvNumberFormattingPreviewResult.visibility = View.GONE
+        }
+        binding.btnPreviewNumberFormatting.setOnClickListener {
+            saveNumberFormattingSettings()
+            val result = previewNumberFormatting(
+                input = binding.etNumberFormattingPreview.text?.toString(),
+                config = numberFormattingPreferences.getConfig()
+            )
+            binding.tvNumberFormattingPreviewResult.text = if (result.isValid) {
+                getString(R.string.formatted_result, result.formattedNumber)
+            } else {
+                getString(R.string.unable_to_format)
+            }
+            binding.tvNumberFormattingPreviewResult.visibility = View.VISIBLE
+        }
         binding.switchShowPreviousCall.setOnCheckedChangeListener { _, isChecked ->
             if (updatingRecentCallSwitch) return@setOnCheckedChangeListener
 
@@ -689,6 +663,21 @@ class MainActivity : AppCompatActivity() {
         binding.btnLoginTelegram.setOnClickListener {
             handleTelegramLogin()
         }
+        binding.btnPreviewCallerCard.setOnClickListener {
+            if (hasOverlayPermission()) {
+                CallerOverlayService.showPreview(applicationContext)
+            } else {
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.preview_caller_card)
+                    .setMessage(R.string.preview_overlay_permission)
+                    .setPositiveButton(R.string.status_action_open_settings) { _, _ ->
+                        requestOverlayPermission()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        refreshAppStatus()
     }
 
     private fun handleTelegramLogin() {
@@ -911,6 +900,130 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun refreshAppStatus() {
+        if (!::binding.isInitialized) return
+
+        val roleManager = getSystemService(RoleManager::class.java)
+        val roleAvailable =
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true
+        val notificationsRelevant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val snapshot = AppStatusSnapshot(
+            callerScreeningAvailable = roleAvailable,
+            callerScreeningActive =
+                roleAvailable && roleManager?.isRoleHeld(RoleManager.ROLE_CALL_SCREENING) == true,
+            overlayAllowed = hasOverlayPermission(),
+            phoneAllowed = isPermissionAllowed(android.Manifest.permission.READ_PHONE_STATE),
+            contactsAllowed = isPermissionAllowed(android.Manifest.permission.READ_CONTACTS),
+            callHistoryAllowed = isPermissionAllowed(android.Manifest.permission.READ_CALL_LOG),
+            callHistoryEnabled = RecentCallPreferences.getInstance(this).isEnabled(),
+            notificationsRelevant = notificationsRelevant,
+            notificationsAllowed =
+                !notificationsRelevant ||
+                    isPermissionAllowed(android.Manifest.permission.POST_NOTIFICATIONS)
+        )
+
+        binding.statusItemsContainer.removeAllViews()
+        buildAppStatusItems(snapshot).forEach { item ->
+            val row = LayoutInflater.from(this)
+                .inflate(R.layout.layout_app_status_item, binding.statusItemsContainer, false)
+            row.findViewById<android.widget.TextView>(R.id.tvStatusName).text =
+                getString(statusNameResource(item.type))
+            row.findViewById<android.widget.TextView>(R.id.tvStatusValue).text =
+                statusValueText(item)
+
+            val actionButton =
+                row.findViewById<com.google.android.material.button.MaterialButton>(
+                    R.id.btnStatusAction
+                )
+            if (item.action == AppStatusAction.NONE) {
+                actionButton.visibility = View.GONE
+            } else {
+                actionButton.text = getString(statusActionResource(item.action))
+                actionButton.setOnClickListener { performStatusAction(item) }
+            }
+            binding.statusItemsContainer.addView(row)
+        }
+    }
+
+    private fun performStatusAction(item: AppStatusItem) {
+        when (item.type) {
+            AppStatusType.CALLER_SCREENING -> {
+                val roleManager = getSystemService(RoleManager::class.java)
+                if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true
+                ) {
+                    roleRequestLauncher.launch(
+                        roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING)
+                    )
+                }
+            }
+            AppStatusType.OVERLAY -> requestOverlayPermission()
+            AppStatusType.PHONE ->
+                requestPermissions(arrayOf(android.Manifest.permission.READ_PHONE_STATE), 101)
+            AppStatusType.CONTACTS ->
+                requestPermissions(arrayOf(android.Manifest.permission.READ_CONTACTS), 101)
+            AppStatusType.CALL_HISTORY -> {
+                val preferences = RecentCallPreferences.getInstance(this)
+                preferences.markPermissionRequested()
+                callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
+            }
+            AppStatusType.NOTIFICATIONS -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    requestPermissions(
+                        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                        101
+                    )
+                }
+            }
+        }
+    }
+
+    private fun isPermissionAllowed(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun statusNameResource(type: AppStatusType): Int = when (type) {
+        AppStatusType.CALLER_SCREENING -> R.string.status_caller_screening
+        AppStatusType.OVERLAY -> R.string.status_overlay
+        AppStatusType.PHONE -> R.string.status_phone
+        AppStatusType.CONTACTS -> R.string.status_contacts
+        AppStatusType.CALL_HISTORY -> R.string.status_call_history
+        AppStatusType.NOTIFICATIONS -> R.string.status_notifications
+    }
+
+    private fun statusValueText(item: AppStatusItem): String {
+        val value = getString(
+            when (item.value) {
+                AppStatusValue.ACTIVE -> R.string.status_active
+                AppStatusValue.ALLOWED -> R.string.status_allowed
+                AppStatusValue.NOT_ALLOWED -> R.string.status_not_allowed
+                AppStatusValue.NOT_SELECTED -> R.string.status_not_selected
+                AppStatusValue.OPTIONAL -> R.string.status_optional
+                AppStatusValue.UNAVAILABLE -> R.string.status_unavailable
+            }
+        )
+        return if (item.optional && item.value != AppStatusValue.OPTIONAL) {
+            getString(R.string.status_optional_suffix, value)
+        } else {
+            value
+        }
+    }
+
+    private fun statusActionResource(action: AppStatusAction): Int = when (action) {
+        AppStatusAction.SELECT -> R.string.status_action_select
+        AppStatusAction.ALLOW -> R.string.status_action_allow
+        AppStatusAction.OPEN_SETTINGS -> R.string.status_action_open_settings
+        AppStatusAction.NONE -> error("No action label")
+    }
+
+    private fun permissionName(permission: String): String = when (permission) {
+        android.Manifest.permission.READ_PHONE_STATE -> "Phone"
+        android.Manifest.permission.READ_CONTACTS -> "Contacts"
+        android.Manifest.permission.POST_NOTIFICATIONS -> "Notifications"
+        else -> permission.substringAfterLast(".")
+    }
+
     private fun hasAllPermissions(): Boolean {
         val permissions = mutableListOf(
             android.Manifest.permission.READ_PHONE_STATE,
@@ -995,20 +1108,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (missingPermissions.isNotEmpty()) {
-            val names = missingPermissions.joinToString(", ") { perm ->
-                when (perm) {
-                    android.Manifest.permission.READ_PHONE_STATE -> "Phone"
-                    android.Manifest.permission.READ_CONTACTS -> "Contacts"
-                    android.Manifest.permission.POST_NOTIFICATIONS -> "Notifications"
-                    else -> perm.substringAfterLast(".")
-                }
-            }
+            val nextPermission = missingPermissions.first()
+            val name = permissionName(nextPermission)
             com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
                 .setTitle("Permissions Required")
-                .setMessage("Please allow the following permissions: $names")
+                .setMessage("Please allow the $name permission.")
                 .setPositiveButton("Allow") { _, _ -> 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        requestPermissions(missingPermissions.toTypedArray(), 101)
+                        requestPermissions(arrayOf(nextPermission), 101)
                     }
                 }
                 .setNeutralButton("App Settings") { _, _ ->
@@ -1051,7 +1158,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        val clip = android.content.ClipData.newPlainText("Caller Info", text)
+        val clip = android.content.ClipData.newPlainText(getString(R.string.app_name), text)
         clipboard.setPrimaryClip(clip)
         Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
     }
@@ -1159,8 +1266,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 101) {
             checkPermissions()
-            // After standard permissions, check if special ones are needed
-            checkSpecialPermissions()
+            refreshAppStatus()
         }
     }
 
@@ -1182,6 +1288,7 @@ class MainActivity : AppCompatActivity() {
             }
             
             updateStatusIndicator(isEnabled)
+            refreshAppStatus()
         }
     }
 

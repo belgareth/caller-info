@@ -116,6 +116,10 @@ private class DeviceCallRecordSource(context: Context) : RecentCallRecordSource 
         value = value,
         incomingValue = CallLog.Calls.INCOMING_TYPE,
         outgoingValue = CallLog.Calls.OUTGOING_TYPE,
-        missedValue = CallLog.Calls.MISSED_TYPE
+        missedValue = CallLog.Calls.MISSED_TYPE,
+        rejectedValue = CallLog.Calls.REJECTED_TYPE,
+        blockedValue = CallLog.Calls.BLOCKED_TYPE,
+        voicemailValue = CallLog.Calls.VOICEMAIL_TYPE,
+        answeredElsewhereValue = CallLog.Calls.ANSWERED_EXTERNALLY_TYPE
     )
 }

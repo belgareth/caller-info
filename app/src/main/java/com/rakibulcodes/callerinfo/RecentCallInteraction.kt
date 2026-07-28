@@ -8,7 +8,11 @@ import java.util.TimeZone
 enum class RecentCallType {
     INCOMING,
     OUTGOING,
-    MISSED
+    MISSED,
+    REJECTED,
+    BLOCKED,
+    VOICEMAIL,
+    ANSWERED_ELSEWHERE
 }
 
 data class RecentCallInteraction(
@@ -32,11 +36,19 @@ fun mapRecentCallType(
     value: Int,
     incomingValue: Int,
     outgoingValue: Int,
-    missedValue: Int
+    missedValue: Int,
+    rejectedValue: Int,
+    blockedValue: Int,
+    voicemailValue: Int,
+    answeredElsewhereValue: Int
 ): RecentCallType? = when (value) {
     incomingValue -> RecentCallType.INCOMING
     outgoingValue -> RecentCallType.OUTGOING
     missedValue -> RecentCallType.MISSED
+    rejectedValue -> RecentCallType.REJECTED
+    blockedValue -> RecentCallType.BLOCKED
+    voicemailValue -> RecentCallType.VOICEMAIL
+    answeredElsewhereValue -> RecentCallType.ANSWERED_ELSEWHERE
     else -> null
 }
 

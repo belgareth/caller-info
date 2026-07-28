@@ -24,8 +24,7 @@ object IncomingCallProcessor {
         val normalizedNumber = normalizePhoneNumber(phoneNumber, config)
         if (normalizedNumber.isEmpty()) return
 
-        // Simple debounce based on time and number to prevent dual-trigger 
-        // from CallScreeningService and CallReceiver
+        // Prevent duplicate processing of the same active call.
         synchronized(this) {
             val now = System.currentTimeMillis()
             if (normalizedNumber == lastProcessedNumber && (now - lastProcessedTime) < 5000) {

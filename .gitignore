@@ -7,6 +7,9 @@
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/appInsightsSettings.xml
+/.idea/deploymentTargetSelector.xml
+/.idea/deviceManager.xml
 .DS_Store
 /build
 /captures
@@ -16,3 +19,4 @@ local.properties
 
 /tdlib_extracted
 /tdlib_native
+/app/release/*.apk

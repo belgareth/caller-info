@@ -27,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.TimeZone
@@ -39,11 +40,28 @@ class CallerOverlayService : Service() {
     private var params: WindowManager.LayoutParams? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var recentCallJob: Job? = null
+    private var previewDismissJob: Job? = null
     private var presentationId = 0L
+    private val presentationState = OverlayPresentationState()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_SHOW_PREVIEW -> {
+                showCallerCardPreview()
+                return START_NOT_STICKY
+            }
+            ACTION_DISMISS_PREVIEW -> {
+                if (presentationState.mode == OverlayPresentationMode.PREVIEW) {
+                    removeOverlay()
+                } else if (presentationState.mode == OverlayPresentationMode.NONE) {
+                    stopSelf()
+                }
+                return START_NOT_STICKY
+            }
+        }
+
         val number = intent?.getStringExtra("number") ?: return START_NOT_STICKY
         val name = intent.getStringExtra("name")
         val carrier = intent.getStringExtra("carrier")
@@ -54,15 +72,24 @@ class CallerOverlayService : Service() {
         val incomingCallStartMillis =
             intent.getLongExtra("incoming_call_start", System.currentTimeMillis())
 
-        showOverlay(number, name, carrier, country, location, email, error)
+        removeOverlayInternal()
+        presentationState.beginRealCall()
+        showOverlay(number, name, carrier, country, location, email, error, false)
         loadRecentCall(number, incomingCallStartMillis, presentationId)
         return START_NOT_STICKY
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun showOverlay(number: String, name: String?, carrier: String?, country: String?, location: String?, email: String? = null, error: String? = null) {
-        removeOverlayInternal() // Remove existing overlay if any
-
+    private fun showOverlay(
+        number: String,
+        name: String?,
+        carrier: String?,
+        country: String?,
+        location: String?,
+        email: String? = null,
+        error: String? = null,
+        isPreview: Boolean
+    ) {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
         val prefs = getSharedPreferences("Settings", Context.MODE_PRIVATE)
@@ -124,6 +151,8 @@ class CallerOverlayService : Service() {
                 }
 
                 view.findViewById<TextView>(R.id.tvName).text = name ?: "Unknown"
+                view.findViewById<View>(R.id.overlayActions).visibility =
+                    if (isPreview) View.GONE else View.VISIBLE
 
                 val carrierText = listOfNotNull(carrier, country).joinToString(" · ")
                 view.findViewById<TextView>(R.id.tvCarrier).text = if (carrierText.isNotEmpty()) carrierText else "Unknown Carrier"
@@ -259,7 +288,41 @@ class CallerOverlayService : Service() {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            presentationState.clear()
             stopSelf()
+        }
+    }
+
+    private fun showCallerCardPreview() {
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            stopSelf()
+            return
+        }
+        if (!presentationState.beginPreview()) return
+
+        val nowMillis = System.currentTimeMillis()
+        val preview = createCallerCardPreviewData(nowMillis).copy(
+            name = getString(R.string.preview_sample_caller),
+            detail = getString(R.string.preview_only)
+        )
+        showOverlay(
+            number = preview.number,
+            name = preview.name,
+            carrier = preview.detail,
+            country = null,
+            location = null,
+            email = null,
+            error = null,
+            isPreview = true
+        )
+        overlayView?.let { view ->
+            bindRecentCall(view, preview.recentCall)
+        }
+        previewDismissJob = serviceScope.launch {
+            delay(PREVIEW_DURATION_MILLIS)
+            if (presentationState.shouldAutoDismissPreview()) {
+                removeOverlay()
+            }
         }
     }
 
@@ -305,6 +368,8 @@ class CallerOverlayService : Service() {
     private fun removeOverlayInternal() {
         recentCallJob?.cancel()
         recentCallJob = null
+        previewDismissJob?.cancel()
+        previewDismissJob = null
         presentationId++
         overlayView?.let {
             try {
@@ -312,6 +377,7 @@ class CallerOverlayService : Service() {
             } catch (e: Exception) {}
             overlayView = null
         }
+        presentationState.clear()
     }
 
     private fun removeOverlay() {
@@ -344,21 +410,33 @@ class CallerOverlayService : Service() {
                 return@launch
             }
 
-            val icon = view.findViewById<ImageView>(R.id.ivRecentCallType)
-            val text = view.findViewById<TextView>(R.id.tvRecentCallTime)
-            val iconDetails = when (interaction.type) {
-                RecentCallType.INCOMING ->
-                    R.drawable.ic_call_incoming to R.string.recent_call_incoming
-                RecentCallType.OUTGOING ->
-                    R.drawable.ic_call_outgoing to R.string.recent_call_outgoing
-                RecentCallType.MISSED ->
-                    R.drawable.ic_call_missed to R.string.recent_call_missed
-            }
-            icon.setImageResource(iconDetails.first)
-            icon.contentDescription = getString(iconDetails.second)
-            text.text = formatRecentCallTime(interaction.timestampMillis)
-            row.visibility = View.VISIBLE
+            bindRecentCall(view, interaction)
         }
+    }
+
+    private fun bindRecentCall(view: View, interaction: RecentCallInteraction) {
+        val icon = view.findViewById<ImageView>(R.id.ivRecentCallType)
+        val text = view.findViewById<TextView>(R.id.tvRecentCallTime)
+        val iconDetails = when (interaction.type) {
+            RecentCallType.INCOMING ->
+                R.drawable.ic_call_incoming to R.string.recent_call_incoming
+            RecentCallType.OUTGOING ->
+                R.drawable.ic_call_outgoing to R.string.recent_call_outgoing
+            RecentCallType.MISSED ->
+                R.drawable.ic_call_missed to R.string.recent_call_missed
+            RecentCallType.REJECTED ->
+                R.drawable.ic_call_rejected to R.string.recent_call_rejected
+            RecentCallType.BLOCKED ->
+                R.drawable.ic_call_blocked to R.string.recent_call_blocked
+            RecentCallType.VOICEMAIL ->
+                R.drawable.ic_call_voicemail to R.string.recent_call_voicemail
+            RecentCallType.ANSWERED_ELSEWHERE ->
+                R.drawable.ic_call_answered_elsewhere to R.string.recent_call_answered_elsewhere
+        }
+        icon.setImageResource(iconDetails.first)
+        icon.contentDescription = getString(iconDetails.second)
+        text.text = formatRecentCallTime(interaction.timestampMillis)
+        view.findViewById<LinearLayout>(R.id.rowRecentCall).visibility = View.VISIBLE
     }
 
     private fun formatRecentCallTime(timestampMillis: Long): String {
@@ -408,5 +486,30 @@ class CallerOverlayService : Service() {
         super.onDestroy()
         removeOverlayInternal()
         serviceScope.cancel()
+    }
+
+    companion object {
+        private const val ACTION_SHOW_PREVIEW =
+            "com.rakibulcodes.callerinfo.action.SHOW_CALLER_CARD_PREVIEW"
+        private const val ACTION_DISMISS_PREVIEW =
+            "com.rakibulcodes.callerinfo.action.DISMISS_CALLER_CARD_PREVIEW"
+        private const val PREVIEW_DURATION_MILLIS = 10_000L
+
+        fun showPreview(context: Context) {
+            context.startService(
+                Intent(context, CallerOverlayService::class.java).setAction(ACTION_SHOW_PREVIEW)
+            )
+        }
+
+        fun dismissPreview(context: Context) {
+            try {
+                context.startService(
+                    Intent(context, CallerOverlayService::class.java)
+                        .setAction(ACTION_DISMISS_PREVIEW)
+                )
+            } catch (_: IllegalStateException) {
+                // The preview also expires automatically if the app can no longer start services.
+            }
+        }
     }
 }

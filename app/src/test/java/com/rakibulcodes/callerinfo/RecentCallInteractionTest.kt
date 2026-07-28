@@ -174,22 +174,68 @@ class RecentCallInteractionTest {
 
     @Test
     fun mapsIncomingCallType() {
-        assertSame(RecentCallType.INCOMING, mapRecentCallType(1, 1, 2, 3))
+        assertSame(RecentCallType.INCOMING, mappedType(1))
     }
 
     @Test
     fun mapsOutgoingCallType() {
-        assertSame(RecentCallType.OUTGOING, mapRecentCallType(2, 1, 2, 3))
+        assertSame(RecentCallType.OUTGOING, mappedType(2))
     }
 
     @Test
     fun mapsMissedCallType() {
-        assertSame(RecentCallType.MISSED, mapRecentCallType(3, 1, 2, 3))
+        assertSame(RecentCallType.MISSED, mappedType(3))
+    }
+
+    @Test
+    fun mapsRejectedCallType() {
+        assertSame(RecentCallType.REJECTED, mappedType(5))
+    }
+
+    @Test
+    fun mapsBlockedCallType() {
+        assertSame(RecentCallType.BLOCKED, mappedType(6))
+    }
+
+    @Test
+    fun mapsVoicemailCallType() {
+        assertSame(RecentCallType.VOICEMAIL, mappedType(4))
+    }
+
+    @Test
+    fun mapsAnsweredElsewhereCallType() {
+        assertSame(RecentCallType.ANSWERED_ELSEWHERE, mappedType(7))
     }
 
     @Test
     fun leavesUnsupportedCallTypeUnmapped() {
-        assertNull(mapRecentCallType(4, 1, 2, 3))
+        assertNull(mappedType(8))
+    }
+
+    @Test
+    fun selectsNewestAdditionalSupportedCallType() {
+        val records = listOf(
+            record("+123712345678", RecentCallType.BLOCKED, 900),
+            record("+123712345678", RecentCallType.REJECTED, 800)
+        )
+
+        assertEquals(
+            RecentCallInteraction(RecentCallType.BLOCKED, 900),
+            finder(records).findPreviousCall("0712345678", 1_000, config)
+        )
+    }
+
+    @Test
+    fun skipsNewestUnknownTypeBeforeAdditionalSupportedCall() {
+        val records = listOf(
+            record("+123712345678", null, 900),
+            record("+123712345678", RecentCallType.VOICEMAIL, 800)
+        )
+
+        assertEquals(
+            RecentCallInteraction(RecentCallType.VOICEMAIL, 800),
+            finder(records).findPreviousCall("0712345678", 1_000, config)
+        )
     }
 
     @Test
@@ -329,6 +375,17 @@ class RecentCallInteractionTest {
         type: RecentCallType?,
         timestampMillis: Long
     ) = RecentCallRecord(number, type, timestampMillis)
+
+    private fun mappedType(value: Int): RecentCallType? = mapRecentCallType(
+        value = value,
+        incomingValue = 1,
+        outgoingValue = 2,
+        missedValue = 3,
+        rejectedValue = 5,
+        blockedValue = 6,
+        voicemailValue = 4,
+        answeredElsewhereValue = 7
+    )
 
     private val testTimeZone: TimeZone = SimpleTimeZone(0, "test")
 
