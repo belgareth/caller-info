@@ -69,14 +69,22 @@
     <string name="error_national_length_required">Required before local conversion is enabled</string>
     <string name="error_national_length_invalid">Enter a positive whole number</string>
     <string name="error_international_length">The complete international number must not exceed 15 digits</string>
-    <string name="header_recent_call">Recent call</string>
-    <string name="label_show_previous_call">Show previous call</string>
-    <string name="desc_show_previous_call">Show the most recent call type and time for the incoming number</string>
+    <string name="header_recent_call">Recent interaction</string>
+    <string name="label_show_previous_call">Show recent interaction</string>
+    <string name="desc_show_previous_call">Show the most recent matching call or message time</string>
+    <string name="label_include_messages">Include messages</string>
+    <string name="desc_include_messages">Compare local message history with call history</string>
     <string name="recent_call_incoming">Incoming call</string>
     <string name="recent_call_outgoing">Outgoing call</string>
     <string name="recent_call_missed">Missed call</string>
+    <string name="recent_message">Message</string>
     <string name="recent_call_yesterday">Yesterday</string>
     <string name="recent_call_permission_title">Call history permission</string>
     <string name="recent_call_permission_message">Allow call history access to show the previous call indicator.</string>
     <string name="recent_call_permission_settings">App settings</string>
+    <string name="message_permission_disclosure_title">Optional message history</string>
+    <string name="message_permission_disclosure">Only the message address, direction or type, and time are checked locally. Message content is not read or displayed. Nothing from message history is uploaded or stored by the app. This feature is optional.</string>
+    <string name="message_permission_continue">Continue</string>
+    <string name="message_permission_title">Message history permission</string>
+    <string name="message_permission_message">Message history access is unavailable. You can allow it from app settings, or continue using call history only.</string>
 </resources>

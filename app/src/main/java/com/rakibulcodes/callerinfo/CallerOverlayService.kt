@@ -26,7 +26,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.TimeZone
@@ -38,7 +40,7 @@ class CallerOverlayService : Service() {
     private var overlayView: View? = null
     private var params: WindowManager.LayoutParams? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var recentCallJob: Job? = null
+    private var recentInteractionJob: Job? = null
     private var presentationId = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -55,7 +57,7 @@ class CallerOverlayService : Service() {
             intent.getLongExtra("incoming_call_start", System.currentTimeMillis())
 
         showOverlay(number, name, carrier, country, location, email, error)
-        loadRecentCall(number, incomingCallStartMillis, presentationId)
+        loadRecentInteraction(number, incomingCallStartMillis, presentationId)
         return START_NOT_STICKY
     }
 
@@ -303,8 +305,8 @@ class CallerOverlayService : Service() {
     }
 
     private fun removeOverlayInternal() {
-        recentCallJob?.cancel()
-        recentCallJob = null
+        recentInteractionJob?.cancel()
+        recentInteractionJob = null
         presentationId++
         overlayView?.let {
             try {
@@ -319,41 +321,52 @@ class CallerOverlayService : Service() {
         stopSelf()
     }
 
-    private fun loadRecentCall(
+    private fun loadRecentInteraction(
         number: String,
         cutoffMillis: Long,
         expectedPresentationId: Long
     ) {
         val view = overlayView ?: return
-        val row = view.findViewById<LinearLayout>(R.id.rowRecentCall)
+        val row = view.findViewById<LinearLayout>(R.id.rowRecentInteraction)
         row.visibility = View.GONE
 
         val config = NumberFormattingPreferences.getInstance(applicationContext).getConfig()
-        recentCallJob = serviceScope.launch {
-            val interaction = RecentCallRepository.getInstance(applicationContext)
-                .findPreviousCall(number, cutoffMillis, config)
+        recentInteractionJob = serviceScope.launch {
+            val interaction = coroutineScope {
+                val call = async {
+                    RecentCallRepository.getInstance(applicationContext)
+                        .findPreviousCall(number, cutoffMillis, config)
+                }
+                val message = async {
+                    RecentMessageRepository.getInstance(applicationContext)
+                        .findPreviousMessage(number, cutoffMillis, config)
+                }
+                selectNewestInteraction(call.await(), message.await())
+            }
                 ?: return@launch
 
             if (presentationId != expectedPresentationId || overlayView !== view) return@launch
 
-            val icon = view.findViewById<ImageView>(R.id.ivRecentCallType)
-            val text = view.findViewById<TextView>(R.id.tvRecentCallTime)
+            val icon = view.findViewById<ImageView>(R.id.ivRecentInteractionType)
+            val text = view.findViewById<TextView>(R.id.tvRecentInteractionTime)
             val iconDetails = when (interaction.type) {
-                RecentCallType.INCOMING ->
+                RecentInteractionType.CALL_INCOMING ->
                     R.drawable.ic_call_incoming to R.string.recent_call_incoming
-                RecentCallType.OUTGOING ->
+                RecentInteractionType.CALL_OUTGOING ->
                     R.drawable.ic_call_outgoing to R.string.recent_call_outgoing
-                RecentCallType.MISSED ->
+                RecentInteractionType.CALL_MISSED ->
                     R.drawable.ic_call_missed to R.string.recent_call_missed
+                RecentInteractionType.MESSAGE ->
+                    R.drawable.ic_message to R.string.recent_message
             }
             icon.setImageResource(iconDetails.first)
             icon.contentDescription = getString(iconDetails.second)
-            text.text = formatRecentCallTime(interaction.timestampMillis)
+            text.text = formatRecentInteractionTime(interaction.timestampMillis)
             row.visibility = View.VISIBLE
         }
     }
 
-    private fun formatRecentCallTime(timestampMillis: Long): String {
+    private fun formatRecentInteractionTime(timestampMillis: Long): String {
         val locale = Locale.getDefault()
         val timeZone = TimeZone.getDefault()
         val use24HourTime = android.text.format.DateFormat.is24HourFormat(this)
