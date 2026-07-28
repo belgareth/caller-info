@@ -55,8 +55,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var gestureDetector: GestureDetectorCompat
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var latestLookupResult: CallerInfoEntity? = null
-    private var updatingRecentInteractionSwitch = false
-    private var updatingMessageSwitch = false
+    private var updatingRecentCallSwitch = false
 
     private val roleRequestLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
@@ -68,17 +67,9 @@ class MainActivity : AppCompatActivity() {
 
     private val callLogPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            setRecentInteractionEnabled(granted)
+            setRecentCallEnabled(granted)
             if (!granted) {
                 showRecentCallPermissionGuidance()
-            }
-        }
-
-    private val messagePermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            setMessageHistoryEnabled(granted)
-            if (!granted) {
-                showMessagePermissionGuidance()
             }
         }
 
@@ -545,17 +536,6 @@ class MainActivity : AppCompatActivity() {
         }
         binding.switchShowPreviousCall.isChecked =
             recentCallPreferences.isEnabled() && recentCallPermissionGranted
-        val recentMessagePreferences = RecentMessagePreferences.getInstance(this)
-        val messagePermissionGranted = ContextCompat.checkSelfPermission(
-            this,
-            android.Manifest.permission.READ_SMS
-        ) == PackageManager.PERMISSION_GRANTED
-        if (recentMessagePreferences.isEnabled() && !messagePermissionGranted) {
-            recentMessagePreferences.setEnabled(false)
-        }
-        binding.switchIncludeMessages.isChecked =
-            recentMessagePreferences.isEnabled() && messagePermissionGranted
-        binding.switchIncludeMessages.isEnabled = binding.switchShowPreviousCall.isChecked
 
         fun saveNumberFormattingSettings() {
             val callingCode = binding.etCallingCode.text?.toString().orEmpty()
@@ -609,7 +589,7 @@ class MainActivity : AppCompatActivity() {
             saveNumberFormattingSettings()
         }
         binding.switchShowPreviousCall.setOnCheckedChangeListener { _, isChecked ->
-            if (updatingRecentInteractionSwitch) return@setOnCheckedChangeListener
+            if (updatingRecentCallSwitch) return@setOnCheckedChangeListener
 
             if (!isChecked) {
                 recentCallPreferences.setEnabled(false)
@@ -621,20 +601,14 @@ class MainActivity : AppCompatActivity() {
             ) {
                 recentCallPreferences.setEnabled(true)
             } else {
-                setRecentInteractionEnabled(false)
-                callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
+                setRecentCallEnabled(false)
+                if (recentCallPreferences.wasPermissionRequested()) {
+                    showRecentCallPermissionGuidance()
+                } else {
+                    recentCallPreferences.markPermissionRequested()
+                    callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
+                }
                 return@setOnCheckedChangeListener
-            }
-            binding.switchIncludeMessages.isEnabled = binding.switchShowPreviousCall.isChecked
-        }
-        binding.switchIncludeMessages.setOnCheckedChangeListener { _, isChecked ->
-            if (updatingMessageSwitch) return@setOnCheckedChangeListener
-
-            if (!isChecked) {
-                recentMessagePreferences.setEnabled(false)
-            } else {
-                setMessageHistoryEnabled(false)
-                showMessagePermissionDisclosure()
             }
         }
 
@@ -1204,79 +1178,20 @@ class MainActivity : AppCompatActivity() {
                     android.Manifest.permission.READ_CALL_LOG
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
-                setRecentInteractionEnabled(false)
-            }
-            val recentMessagePreferences = RecentMessagePreferences.getInstance(this)
-            if (
-                recentMessagePreferences.isEnabled() &&
-                ContextCompat.checkSelfPermission(
-                    this,
-                    android.Manifest.permission.READ_SMS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                setMessageHistoryEnabled(false)
+                setRecentCallEnabled(false)
             }
             
             updateStatusIndicator(isEnabled)
         }
     }
 
-    private fun setRecentInteractionEnabled(enabled: Boolean) {
+    private fun setRecentCallEnabled(enabled: Boolean) {
         RecentCallPreferences.getInstance(this).setEnabled(enabled)
         if (::binding.isInitialized) {
-            updatingRecentInteractionSwitch = true
+            updatingRecentCallSwitch = true
             binding.switchShowPreviousCall.isChecked = enabled
-            binding.switchIncludeMessages.isEnabled = enabled
-            updatingRecentInteractionSwitch = false
+            updatingRecentCallSwitch = false
         }
-    }
-
-    private fun setMessageHistoryEnabled(enabled: Boolean) {
-        RecentMessagePreferences.getInstance(this).setEnabled(enabled)
-        if (::binding.isInitialized) {
-            updatingMessageSwitch = true
-            binding.switchIncludeMessages.isChecked = enabled
-            updatingMessageSwitch = false
-        }
-    }
-
-    private fun showMessagePermissionDisclosure() {
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.message_permission_disclosure_title)
-            .setMessage(R.string.message_permission_disclosure)
-            .setPositiveButton(R.string.message_permission_continue) { _, _ ->
-                val permissionGranted = ContextCompat.checkSelfPermission(
-                    this,
-                    android.Manifest.permission.READ_SMS
-                ) == PackageManager.PERMISSION_GRANTED
-                val preferences = RecentMessagePreferences.getInstance(this)
-
-                when {
-                    permissionGranted -> setMessageHistoryEnabled(true)
-                    preferences.wasPermissionRequested() -> showMessagePermissionGuidance()
-                    else -> {
-                        preferences.markPermissionRequested()
-                        messagePermissionLauncher.launch(android.Manifest.permission.READ_SMS)
-                    }
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun showMessagePermissionGuidance() {
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.message_permission_title)
-            .setMessage(R.string.message_permission_message)
-            .setPositiveButton(R.string.recent_call_permission_settings) { _, _ ->
-                startActivity(
-                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                )
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private fun showRecentCallPermissionGuidance() {

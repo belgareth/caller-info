@@ -234,7 +234,7 @@
             </LinearLayout>
 
             <LinearLayout
-                android:id="@+id/rowRecentInteraction"
+                android:id="@+id/rowRecentCall"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
@@ -244,13 +244,13 @@
                 android:visibility="gone">
 
                 <ImageView
-                    android:id="@+id/ivRecentInteractionType"
+                    android:id="@+id/ivRecentCallType"
                     android:layout_width="16dp"
                     android:layout_height="16dp"
                     app:tint="?attr/colorOnSurfaceVariant" />
 
                 <TextView
-                    android:id="@+id/tvRecentInteractionTime"
+                    android:id="@+id/tvRecentCallTime"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"

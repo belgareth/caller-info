@@ -31,6 +31,33 @@ class RecentCallInteractionTest {
     }
 
     @Test
+    fun selectsNewestMatchingIncomingCall() {
+        assertEquals(
+            RecentCallInteraction(RecentCallType.INCOMING, 900),
+            finder(listOf(record("+123712345678", RecentCallType.INCOMING, 900)))
+                .findPreviousCall("0712345678", 1_000, config)
+        )
+    }
+
+    @Test
+    fun selectsNewestMatchingOutgoingCall() {
+        assertEquals(
+            RecentCallInteraction(RecentCallType.OUTGOING, 900),
+            finder(listOf(record("+123712345678", RecentCallType.OUTGOING, 900)))
+                .findPreviousCall("0712345678", 1_000, config)
+        )
+    }
+
+    @Test
+    fun selectsNewestMatchingMissedCall() {
+        assertEquals(
+            RecentCallInteraction(RecentCallType.MISSED, 900),
+            finder(listOf(record("+123712345678", RecentCallType.MISSED, 900)))
+                .findPreviousCall("0712345678", 1_000, config)
+        )
+    }
+
+    @Test
     fun selectsOldMatchingCall() {
         val oldTimestamp = timestamp(2025, Calendar.JANUARY, 14, 2, 0)
         val cutoff = timestamp(2026, Calendar.MARCH, 8, 16, 0)
@@ -218,6 +245,42 @@ class RecentCallInteractionTest {
 
         assertNull(result)
         assertEquals(0, queryCount)
+    }
+
+    @Test
+    fun currentPresentationAcceptsResult() {
+        assertEquals(
+            true,
+            isRecentCallPresentationCurrent(
+                expectedPresentationId = 4,
+                currentPresentationId = 4,
+                sameOverlayView = true
+            )
+        )
+    }
+
+    @Test
+    fun dismissedPresentationRejectsResult() {
+        assertEquals(
+            false,
+            isRecentCallPresentationCurrent(
+                expectedPresentationId = 4,
+                currentPresentationId = 5,
+                sameOverlayView = false
+            )
+        )
+    }
+
+    @Test
+    fun replacedOverlayRejectsResult() {
+        assertEquals(
+            false,
+            isRecentCallPresentationCurrent(
+                expectedPresentationId = 4,
+                currentPresentationId = 4,
+                sameOverlayView = false
+            )
+        )
     }
 
     @Test

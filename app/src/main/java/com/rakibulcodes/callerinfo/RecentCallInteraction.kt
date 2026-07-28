@@ -16,48 +16,17 @@ data class RecentCallInteraction(
     val timestampMillis: Long
 )
 
-enum class RecentInteractionType {
-    CALL_INCOMING,
-    CALL_OUTGOING,
-    CALL_MISSED,
-    MESSAGE
-}
-
-data class RecentInteraction(
-    val type: RecentInteractionType,
-    val timestampMillis: Long
-)
-
-fun selectNewestInteraction(
-    call: RecentCallInteraction?,
-    message: RecentMessageInteraction?
-): RecentInteraction? {
-    if (call == null && message == null) return null
-    if (call == null) {
-        return RecentInteraction(RecentInteractionType.MESSAGE, message!!.timestampMillis)
-    }
-
-    val callInteraction = RecentInteraction(
-        type = when (call.type) {
-            RecentCallType.INCOMING -> RecentInteractionType.CALL_INCOMING
-            RecentCallType.OUTGOING -> RecentInteractionType.CALL_OUTGOING
-            RecentCallType.MISSED -> RecentInteractionType.CALL_MISSED
-        },
-        timestampMillis = call.timestampMillis
-    )
-
-    return if (message != null && message.timestampMillis > call.timestampMillis) {
-        RecentInteraction(RecentInteractionType.MESSAGE, message.timestampMillis)
-    } else {
-        callInteraction
-    }
-}
-
 data class RecentCallRecord(
     val number: String?,
     val type: RecentCallType?,
     val timestampMillis: Long
 )
+
+fun isRecentCallPresentationCurrent(
+    expectedPresentationId: Long,
+    currentPresentationId: Long,
+    sameOverlayView: Boolean
+): Boolean = expectedPresentationId == currentPresentationId && sameOverlayView
 
 fun mapRecentCallType(
     value: Int,

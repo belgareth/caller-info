@@ -18,9 +18,17 @@ class RecentCallPreferences private constructor(context: Context) {
         preferences.edit().putBoolean(KEY_ENABLED, enabled).apply()
     }
 
+    fun wasPermissionRequested(): Boolean =
+        preferences.all[KEY_PERMISSION_REQUESTED] as? Boolean ?: false
+
+    fun markPermissionRequested() {
+        preferences.edit().putBoolean(KEY_PERMISSION_REQUESTED, true).apply()
+    }
+
     companion object {
         private const val PREFERENCES_NAME = "Settings"
         private const val KEY_ENABLED = "showPreviousCall"
+        private const val KEY_PERMISSION_REQUESTED = "callLogPermissionRequested"
 
         @Volatile
         private var instance: RecentCallPreferences? = null
