@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var gestureDetector: GestureDetectorCompat
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var latestLookupResult: CallerInfoEntity? = null
+    private var updatingRecentCallSwitch = false
 
     private val roleRequestLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
@@ -63,6 +64,14 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Call Screening role denied. Automatic Caller ID might not work on Android 10+.", Toast.LENGTH_LONG).show()
         }
     }
+
+    private val callLogPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            setRecentCallEnabled(granted)
+            if (!granted) {
+                showRecentCallPermissionGuidance()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val prefs = getSharedPreferences("Settings", Context.MODE_PRIVATE)
@@ -88,7 +97,6 @@ class MainActivity : AppCompatActivity() {
     private fun requestInitialPermissions() {
         val permissions = mutableListOf(
             android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CALL_LOG,
             android.Manifest.permission.READ_CONTACTS,
             android.Manifest.permission.ACCESS_NETWORK_STATE
         )
@@ -518,6 +526,16 @@ class MainActivity : AppCompatActivity() {
         binding.etNationalNumberLength.setText(numberFormattingPreferences.getNationalNumberLength())
         binding.switchAcceptWithoutPrefix.isChecked =
             numberFormattingPreferences.getAcceptWithoutPrefix()
+        val recentCallPreferences = RecentCallPreferences.getInstance(this)
+        val recentCallPermissionGranted = ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.READ_CALL_LOG
+        ) == PackageManager.PERMISSION_GRANTED
+        if (recentCallPreferences.isEnabled() && !recentCallPermissionGranted) {
+            recentCallPreferences.setEnabled(false)
+        }
+        binding.switchShowPreviousCall.isChecked =
+            recentCallPreferences.isEnabled() && recentCallPermissionGranted
 
         fun saveNumberFormattingSettings() {
             val callingCode = binding.etCallingCode.text?.toString().orEmpty()
@@ -569,6 +587,23 @@ class MainActivity : AppCompatActivity() {
         binding.etNationalNumberLength.doAfterTextChanged { saveNumberFormattingSettings() }
         binding.switchAcceptWithoutPrefix.setOnCheckedChangeListener { _, _ ->
             saveNumberFormattingSettings()
+        }
+        binding.switchShowPreviousCall.setOnCheckedChangeListener { _, isChecked ->
+            if (updatingRecentCallSwitch) return@setOnCheckedChangeListener
+
+            if (!isChecked) {
+                recentCallPreferences.setEnabled(false)
+            } else if (
+                ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.READ_CALL_LOG
+                ) == PackageManager.PERMISSION_GRANTED
+            ) {
+                recentCallPreferences.setEnabled(true)
+            } else {
+                setRecentCallEnabled(false)
+                callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
+            }
         }
 
         val historyOptions = arrayOf("100", "1000", "2000", "5000", "10000", "20000", "Unlimited")
@@ -873,7 +908,6 @@ class MainActivity : AppCompatActivity() {
     private fun hasAllPermissions(): Boolean {
         val permissions = mutableListOf(
             android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CALL_LOG,
             android.Manifest.permission.READ_CONTACTS,
             android.Manifest.permission.ACCESS_NETWORK_STATE
         )
@@ -891,7 +925,6 @@ class MainActivity : AppCompatActivity() {
     private fun checkPermissions() {
         val permissions = mutableListOf(
             android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CALL_LOG,
             android.Manifest.permission.READ_CONTACTS
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -916,7 +949,6 @@ class MainActivity : AppCompatActivity() {
                 val names = missingPermissions.joinToString(", ") { perm ->
                     when (perm) {
                         android.Manifest.permission.READ_PHONE_STATE -> "Phone"
-                        android.Manifest.permission.READ_CALL_LOG -> "Call Log"
                         android.Manifest.permission.READ_CONTACTS -> "Contacts"
                         android.Manifest.permission.POST_NOTIFICATIONS -> "Notifications"
                         else -> perm.substringAfterLast(".")
@@ -946,7 +978,6 @@ class MainActivity : AppCompatActivity() {
     private fun promptForPermissions() {
         val permissions = mutableListOf(
             android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CALL_LOG,
             android.Manifest.permission.READ_CONTACTS
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -961,7 +992,6 @@ class MainActivity : AppCompatActivity() {
             val names = missingPermissions.joinToString(", ") { perm ->
                 when (perm) {
                     android.Manifest.permission.READ_PHONE_STATE -> "Phone"
-                    android.Manifest.permission.READ_CALL_LOG -> "Call Log"
                     android.Manifest.permission.READ_CONTACTS -> "Contacts"
                     android.Manifest.permission.POST_NOTIFICATIONS -> "Notifications"
                     else -> perm.substringAfterLast(".")
@@ -1134,9 +1164,43 @@ class MainActivity : AppCompatActivity() {
             checkPermissions()
             val prefs = getSharedPreferences("Settings", MODE_PRIVATE)
             val isEnabled = prefs.getBoolean("enabled", false)
+            val recentCallPreferences = RecentCallPreferences.getInstance(this)
+            if (
+                recentCallPreferences.isEnabled() &&
+                ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.READ_CALL_LOG
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                setRecentCallEnabled(false)
+            }
             
             updateStatusIndicator(isEnabled)
         }
+    }
+
+    private fun setRecentCallEnabled(enabled: Boolean) {
+        RecentCallPreferences.getInstance(this).setEnabled(enabled)
+        if (::binding.isInitialized) {
+            updatingRecentCallSwitch = true
+            binding.switchShowPreviousCall.isChecked = enabled
+            updatingRecentCallSwitch = false
+        }
+    }
+
+    private fun showRecentCallPermissionGuidance() {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.recent_call_permission_title)
+            .setMessage(R.string.recent_call_permission_message)
+            .setPositiveButton(R.string.recent_call_permission_settings) { _, _ ->
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                )
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun updateStatusIndicator(enabled: Boolean) {

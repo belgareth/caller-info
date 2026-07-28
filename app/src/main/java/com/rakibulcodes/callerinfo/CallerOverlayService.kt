@@ -16,11 +16,20 @@ import android.content.res.ColorStateList
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.view.ContextThemeWrapper
 import com.google.android.material.button.MaterialButton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.sqrt
 
 class CallerOverlayService : Service() {
@@ -28,6 +37,9 @@ class CallerOverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var params: WindowManager.LayoutParams? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var recentCallJob: Job? = null
+    private var presentationId = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -39,8 +51,11 @@ class CallerOverlayService : Service() {
         val location = intent.getStringExtra("location")
         val email = intent.getStringExtra("email")
         val error = intent.getStringExtra("error")
+        val incomingCallStartMillis =
+            intent.getLongExtra("incoming_call_start", System.currentTimeMillis())
 
         showOverlay(number, name, carrier, country, location, email, error)
+        loadRecentCall(number, incomingCallStartMillis, presentationId)
         return START_NOT_STICKY
     }
 
@@ -288,6 +303,9 @@ class CallerOverlayService : Service() {
     }
 
     private fun removeOverlayInternal() {
+        recentCallJob?.cancel()
+        recentCallJob = null
+        presentationId++
         overlayView?.let {
             try {
                 windowManager?.removeView(it)
@@ -299,6 +317,63 @@ class CallerOverlayService : Service() {
     private fun removeOverlay() {
         removeOverlayInternal()
         stopSelf()
+    }
+
+    private fun loadRecentCall(
+        number: String,
+        cutoffMillis: Long,
+        expectedPresentationId: Long
+    ) {
+        val view = overlayView ?: return
+        val row = view.findViewById<LinearLayout>(R.id.rowRecentCall)
+        row.visibility = View.GONE
+
+        val config = NumberFormattingPreferences.getInstance(applicationContext).getConfig()
+        recentCallJob = serviceScope.launch {
+            val interaction = RecentCallRepository.getInstance(applicationContext)
+                .findPreviousCall(number, cutoffMillis, config)
+                ?: return@launch
+
+            if (presentationId != expectedPresentationId || overlayView !== view) return@launch
+
+            val icon = view.findViewById<ImageView>(R.id.ivRecentCallType)
+            val text = view.findViewById<TextView>(R.id.tvRecentCallTime)
+            val iconDetails = when (interaction.type) {
+                RecentCallType.INCOMING ->
+                    R.drawable.ic_call_incoming to R.string.recent_call_incoming
+                RecentCallType.OUTGOING ->
+                    R.drawable.ic_call_outgoing to R.string.recent_call_outgoing
+                RecentCallType.MISSED ->
+                    R.drawable.ic_call_missed to R.string.recent_call_missed
+            }
+            icon.setImageResource(iconDetails.first)
+            icon.contentDescription = getString(iconDetails.second)
+            text.text = formatRecentCallTime(interaction.timestampMillis)
+            row.visibility = View.VISIBLE
+        }
+    }
+
+    private fun formatRecentCallTime(timestampMillis: Long): String {
+        val locale = Locale.getDefault()
+        val timeZone = TimeZone.getDefault()
+        val use24HourTime = android.text.format.DateFormat.is24HourFormat(this)
+
+        return RecentCallDateFormatter.format(
+            timestampMillis = timestampMillis,
+            nowMillis = System.currentTimeMillis(),
+            locale = locale,
+            timeZone = timeZone,
+            yesterdayLabel = getString(R.string.recent_call_yesterday)
+        ) { style ->
+            val skeleton = when (style) {
+                RecentCallDateStyle.TODAY,
+                RecentCallDateStyle.YESTERDAY -> if (use24HourTime) "Hm" else "hm"
+                RecentCallDateStyle.CURRENT_YEAR ->
+                    if (use24HourTime) "MMMdHm" else "MMMdhm"
+                RecentCallDateStyle.PREVIOUS_YEAR -> "yMMMd"
+            }
+            android.text.format.DateFormat.getBestDateTimePattern(locale, skeleton)
+        }
     }
 
     private fun buildOverlayShareText(
@@ -324,5 +399,6 @@ class CallerOverlayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         removeOverlayInternal()
+        serviceScope.cancel()
     }
 }

@@ -19,6 +19,7 @@ object IncomingCallProcessor {
     private var lastProcessedTime: Long = 0
 
     suspend fun processCall(context: Context, phoneNumber: String) {
+        val incomingCallStartMillis = System.currentTimeMillis()
         val config = NumberFormattingPreferences.getInstance(context).getConfig()
         val normalizedNumber = normalizePhoneNumber(phoneNumber, config)
         if (normalizedNumber.isEmpty()) return
@@ -57,6 +58,7 @@ object IncomingCallProcessor {
                     putExtra("location", result.location)
                     putExtra("email", result.email)
                     putExtra("error", result.error)
+                    putExtra("incoming_call_start", incomingCallStartMillis)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startService(overlayIntent)

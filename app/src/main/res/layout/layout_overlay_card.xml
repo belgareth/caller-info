@@ -233,6 +233,32 @@
                     android:textColor="?attr/colorOnSurfaceVariant" />
             </LinearLayout>
 
+            <LinearLayout
+                android:id="@+id/rowRecentCall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="16dp"
+                android:paddingTop="10dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/ivRecentCallType"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    app:tint="?attr/colorOnSurfaceVariant" />
+
+                <TextView
+                    android:id="@+id/tvRecentCallTime"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurfaceVariant" />
+            </LinearLayout>
+
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
