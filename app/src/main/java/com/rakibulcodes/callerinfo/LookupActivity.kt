@@ -33,7 +33,7 @@ class LookupActivity : AppCompatActivity() {
         }
 
         sharedText?.let { text ->
-            val normalizedNumber = normalizePhoneNumber(text)
+            val normalizedNumber = repository.sanitizeNumber(text)
             if (normalizedNumber.isNotEmpty()) {
                 Toast.makeText(this, "Searching $normalizedNumber...", Toast.LENGTH_SHORT).show()
 

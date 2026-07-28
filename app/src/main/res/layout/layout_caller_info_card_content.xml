@@ -51,7 +51,7 @@
         android:textAppearance="?attr/textAppearanceBodyMedium"
         android:textColor="?attr/colorOnSurfaceVariant"
         app:drawableStartCompat="@drawable/ic_phone"
-        tools:text="+880 1234 567890" />
+        tools:text="Phone number" />
 
     <!-- Carrier and country -->
     <TextView

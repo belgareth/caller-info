@@ -465,7 +465,8 @@ class MainActivity : AppCompatActivity() {
                     repository.deleteHistoryItem(info.number)
                     loadHistory()
                 }
-            }
+            },
+            normalizeNumber = repository::sanitizeNumber
         )
         binding.rvHistory.layoutManager = LinearLayoutManager(this)
         binding.rvHistory.adapter = historyAdapter
@@ -504,6 +505,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupSetupSection() {
         val prefs = getSharedPreferences("Settings", Context.MODE_PRIVATE)
         val tgPrefs = getSharedPreferences("TelegramSettings", Context.MODE_PRIVATE)
+        val numberFormattingPreferences = NumberFormattingPreferences.getInstance(this)
         
         // Initialize connection illustration - always visible
         binding.llInputFields.visibility = View.VISIBLE
@@ -511,6 +513,63 @@ class MainActivity : AppCompatActivity() {
         
         binding.switchEnable.isChecked = prefs.getBoolean("enabled", false)
         binding.switchLookupKnown.isChecked = prefs.getBoolean("lookup_known", false)
+        binding.etCallingCode.setText(numberFormattingPreferences.getCallingCode())
+        binding.etLocalPrefix.setText(numberFormattingPreferences.getLocalPrefix())
+        binding.etNationalNumberLength.setText(numberFormattingPreferences.getNationalNumberLength())
+        binding.switchAcceptWithoutPrefix.isChecked =
+            numberFormattingPreferences.getAcceptWithoutPrefix()
+
+        fun saveNumberFormattingSettings() {
+            val callingCode = binding.etCallingCode.text?.toString().orEmpty()
+            val localPrefix = binding.etLocalPrefix.text?.toString().orEmpty()
+            val nationalLengthText = binding.etNationalNumberLength.text?.toString().orEmpty()
+            val nationalLength = nationalLengthText.toIntOrNull()
+            val acceptWithoutPrefix = binding.switchAcceptWithoutPrefix.isChecked
+            val profileRequested =
+                callingCode.isNotEmpty() ||
+                    localPrefix.isNotEmpty() ||
+                    nationalLengthText.isNotEmpty() ||
+                    acceptWithoutPrefix
+
+            val callingCodeValid = isValidCallingCode(callingCode)
+            val localPrefixValid = isValidLocalPrefix(localPrefix)
+            val nationalLengthValid = nationalLength != null && nationalLength > 0
+
+            binding.tilCallingCode.error = when {
+                callingCode.isEmpty() && profileRequested ->
+                    getString(R.string.error_calling_code_required)
+                callingCode.isNotEmpty() && !callingCodeValid ->
+                    getString(R.string.error_calling_code_invalid)
+                else -> null
+            }
+            binding.tilLocalPrefix.error =
+                if (localPrefixValid) null else getString(R.string.error_local_prefix_invalid)
+            binding.tilNationalNumberLength.error = when {
+                nationalLengthText.isEmpty() && profileRequested ->
+                    getString(R.string.error_national_length_required)
+                nationalLengthText.isNotEmpty() && !nationalLengthValid ->
+                    getString(R.string.error_national_length_invalid)
+                callingCodeValid &&
+                    nationalLengthValid &&
+                    !isValidNationalNumberLength(callingCode, nationalLength) ->
+                    getString(R.string.error_international_length)
+                else -> null
+            }
+
+            numberFormattingPreferences.save(
+                callingCode = callingCode,
+                localPrefix = localPrefix,
+                nationalNumberLength = nationalLengthText,
+                acceptWithoutPrefix = acceptWithoutPrefix
+            )
+        }
+
+        binding.etCallingCode.doAfterTextChanged { saveNumberFormattingSettings() }
+        binding.etLocalPrefix.doAfterTextChanged { saveNumberFormattingSettings() }
+        binding.etNationalNumberLength.doAfterTextChanged { saveNumberFormattingSettings() }
+        binding.switchAcceptWithoutPrefix.setOnCheckedChangeListener { _, _ ->
+            saveNumberFormattingSettings()
+        }
 
         val historyOptions = arrayOf("100", "1000", "2000", "5000", "10000", "20000", "Unlimited")
         val historyAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, historyOptions)

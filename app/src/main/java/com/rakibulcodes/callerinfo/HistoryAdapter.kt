@@ -13,7 +13,8 @@ class HistoryAdapter(
     private val onSave: (CallerInfoEntity) -> Unit,
     private val onCopy: (CallerInfoEntity) -> Unit,
     private val onShare: (CallerInfoEntity) -> Unit,
-    private val onDelete: (CallerInfoEntity) -> Unit
+    private val onDelete: (CallerInfoEntity) -> Unit,
+    private val normalizeNumber: (String) -> String
 ) :
     RecyclerView.Adapter<HistoryAdapter.ViewHolder>() {
 
@@ -96,8 +97,8 @@ class HistoryAdapter(
             override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
                 val oldNumber = items[oldItemPosition].number
                 val newNumber = newItems[newItemPosition].number
-                val oldLookupValue = normalizePhoneNumber(oldNumber)
-                val newLookupValue = normalizePhoneNumber(newNumber)
+                val oldLookupValue = normalizeNumber(oldNumber)
+                val newLookupValue = normalizeNumber(newNumber)
                 return if (oldLookupValue.isNotEmpty() && newLookupValue.isNotEmpty()) {
                     oldLookupValue == newLookupValue
                 } else {

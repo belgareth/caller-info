@@ -2,6 +2,7 @@ package com.rakibulcodes.callerinfo.data
 
 import android.content.Context
 import android.util.Log
+import com.rakibulcodes.callerinfo.NumberFormattingPreferences
 import com.rakibulcodes.callerinfo.normalizePhoneNumber
 import com.rakibulcodes.callerinfo.data.database.AppDatabase
 import com.rakibulcodes.callerinfo.data.database.CallerInfoEntity
@@ -20,6 +21,7 @@ class CallerInfoRepository(private val context: Context) {
     private val gson = Gson()
     private val db = AppDatabase.getDatabase(context)
     private val telegramManager = TelegramManager.getInstance(context)
+    private val numberFormattingPreferences = NumberFormattingPreferences.getInstance(context)
 
     suspend fun getCallerInfo(rawNumber: String): CallerInfoEntity {
         val number = sanitizeNumber(rawNumber)
@@ -55,13 +57,14 @@ class CallerInfoRepository(private val context: Context) {
     }
 
     suspend fun deleteHistoryItem(number: String) {
-        val normalizedNumber = normalizePhoneNumber(number)
+        val normalizedNumber = sanitizeNumber(number)
         if (normalizedNumber.isNotEmpty()) {
             db.callerInfoDao().deleteByNumber(normalizedNumber)
         }
     }
 
-    fun sanitizeNumber(input: String?): String = normalizePhoneNumber(input)
+    fun sanitizeNumber(input: String?): String =
+        normalizePhoneNumber(input, numberFormattingPreferences.getConfig())
 
     private suspend fun fetchFromTelegram(number: String): CallerInfoEntity = withContext(Dispatchers.IO) {
         if (!telegramManager.isReady()) {

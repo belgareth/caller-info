@@ -19,7 +19,8 @@ object IncomingCallProcessor {
     private var lastProcessedTime: Long = 0
 
     suspend fun processCall(context: Context, phoneNumber: String) {
-        val normalizedNumber = normalizePhoneNumber(phoneNumber)
+        val config = NumberFormattingPreferences.getInstance(context).getConfig()
+        val normalizedNumber = normalizePhoneNumber(phoneNumber, config)
         if (normalizedNumber.isEmpty()) return
 
         // Simple debounce based on time and number to prevent dual-trigger 

@@ -28,7 +28,7 @@
     <string name="btn_save_settings">Save</string>
     <string name="lookup_prompt">Enter a phone number to search</string>
     <string name="hint_phone_number">Phone Number</string>
-    <string name="helper_phone_format">e.g. +8801712345678 or 01712345678</string>
+    <string name="helper_phone_format">Use international format or configure local number formatting in Settings</string>
     <string name="btn_search">Search</string>
     <string name="label_result">Result</string>
     <string name="btn_save">Save</string>
@@ -54,4 +54,19 @@
     <string name="error_empty_field">Cannot be empty</string>
     <string name="error_max_history_range">Must be between 100 and 10000</string>
     <string name="msg_max_history_saved">Max history size saved</string>
+    <string name="header_number_formatting">Number formatting</string>
+    <string name="label_calling_code">Calling code</string>
+    <string name="desc_calling_code">International calling code without the plus sign</string>
+    <string name="label_local_prefix">Local prefix</string>
+    <string name="desc_local_prefix">Digits removed from the beginning of a local number</string>
+    <string name="label_national_number_length">National number length</string>
+    <string name="desc_national_number_length">Expected digits after removing the local prefix</string>
+    <string name="label_accept_without_prefix">Accept numbers without local prefix</string>
+    <string name="desc_accept_without_prefix">Add the calling code when the number already has the expected national length</string>
+    <string name="error_calling_code_required">Required before local conversion is enabled</string>
+    <string name="error_calling_code_invalid">Use one to three digits and do not begin with zero</string>
+    <string name="error_local_prefix_invalid">Use digits only</string>
+    <string name="error_national_length_required">Required before local conversion is enabled</string>
+    <string name="error_national_length_invalid">Enter a positive whole number</string>
+    <string name="error_international_length">The complete international number must not exceed 15 digits</string>
 </resources>
