@@ -14,8 +14,8 @@ android {
         applicationId = "com.rakibulcodes.callerinfo.test"
         minSdk = 29
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.1.0-test.8"
+        versionCode = 11
+        versionName = "1.1.0-test.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -55,7 +55,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
-    implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
 
     // Database

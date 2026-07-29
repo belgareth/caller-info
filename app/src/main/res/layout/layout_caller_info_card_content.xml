@@ -23,7 +23,7 @@
             android:textAppearance="?attr/textAppearanceTitleMedium"
             android:textColor="?attr/colorOnSurface"
             android:textStyle="bold"
-            tools:text="John Doe" />
+            tools:text="Sample caller" />
             
         <!-- Timestamp -->
         <TextView
@@ -51,7 +51,7 @@
         android:textAppearance="?attr/textAppearanceBodyMedium"
         android:textColor="?attr/colorOnSurfaceVariant"
         app:drawableStartCompat="@drawable/ic_phone"
-        tools:text="Phone number" />
+        tools:text="0000000000" />
 
     <!-- Carrier and country -->
     <TextView
@@ -65,7 +65,7 @@
         android:textAppearance="?attr/textAppearanceBodyMedium"
         android:textColor="?attr/colorOnSurfaceVariant"
         app:drawableStartCompat="@drawable/ic_sim"
-        tools:text="Teletalk · Bangladesh" />
+        tools:text="Sample organization" />
 
     <!-- Email (optional) -->
     <TextView
@@ -80,7 +80,7 @@
         android:textColor="?attr/colorOnSurfaceVariant"
         android:visibility="gone"
         app:drawableStartCompat="@drawable/ic_email"
-        tools:text="contact@example.com"
+        tools:text="sample@example.invalid"
         tools:visibility="visible" />
 
     <!-- Region / Location (optional) -->
@@ -96,7 +96,7 @@
         android:textColor="?attr/colorOnSurfaceVariant"
         android:visibility="gone"
         app:drawableStartCompat="@drawable/ic_region"
-        tools:text="Dhaka, Bangladesh"
+        tools:text="Sample detail"
         tools:visibility="visible" />
 
     <!-- Address (optional) -->
@@ -112,7 +112,7 @@
         android:textColor="?attr/colorOnSurfaceVariant"
         android:visibility="gone"
         app:drawableStartCompat="@drawable/ic_location"
-        tools:text="123 Main Street, Dhaka"
+        tools:text="Sample detail"
         tools:visibility="visible" />
 
     <!-- Error message (optional) -->

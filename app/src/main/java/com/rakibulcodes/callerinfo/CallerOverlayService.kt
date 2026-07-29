@@ -65,7 +65,13 @@ class CallerOverlayService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_CLEAR_INCOMING_PRESENTATION -> {
-                removeOverlay()
+                val generation = intent.getLongExtra("call_generation", -1L)
+                if (
+                    presentationState.canClearIncoming(generation) &&
+                    activeCallGeneration == generation
+                ) {
+                    removeOverlay()
+                }
                 return START_NOT_STICKY
             }
         }
@@ -97,7 +103,7 @@ class CallerOverlayService : Service() {
         activeNormalizedNumber = number
         pendingVerificationState = verificationState
         pendingLookupSource = lookupSource
-        presentationState.beginRealCall()
+        presentationState.beginRealCall(callGeneration)
         showOverlay(number, name, carrier, country, location, email, error, false)
         loadRecentCall(
             number,
@@ -326,8 +332,7 @@ class CallerOverlayService : Service() {
 
                 windowManager?.addView(view, params)
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
             presentationState.clear()
             stopSelf()
         }
@@ -401,8 +406,8 @@ class CallerOverlayService : Service() {
 
             try {
                 windowManager?.updateViewLayout(view, params)
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (_: Exception) {
+                // A later presentation update can retry with the current generation.
             }
         }
     }

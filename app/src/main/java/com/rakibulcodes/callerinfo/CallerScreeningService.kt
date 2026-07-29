@@ -65,9 +65,12 @@ class CallerScreeningService : CallScreeningService() {
         }
 
     private fun dispatchIncomingCall(snapshot: IncomingCallSnapshot) {
-        val generation = activeIncomingCallGeneration.begin()
+        val previousGeneration = activeIncomingCallGeneration.currentGeneration()
         lookupJob?.cancel()
-        CallerOverlayService.clearIncomingPresentation(applicationContext, generation)
+        previousGeneration?.let {
+            CallerOverlayService.clearIncomingPresentation(applicationContext, it)
+        }
+        val generation = activeIncomingCallGeneration.begin()
 
         lookupJob = serviceScope.launch {
             val normalizedNumber = normalizePresentedIncomingNumber(

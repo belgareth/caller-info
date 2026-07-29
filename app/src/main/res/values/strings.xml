@@ -43,8 +43,8 @@
     <string name="dev_crafted_by">Built by</string>
     <string name="dev_name">Md. Rakibul Islam</string>
     <string name="dev_intro">Full Stack Developer &amp; Automation Expert</string>
-    <string name="btn_website">Website</string>
-    <string name="btn_github">GitHub</string>
+    <string name="btn_website">Releases</string>
+    <string name="btn_github">Source</string>
     <string name="hint_phone">Telegram Phone Number</string>
     <string name="hint_code">Login Code</string>
     <string name="hint_password">Password (2FA)</string>

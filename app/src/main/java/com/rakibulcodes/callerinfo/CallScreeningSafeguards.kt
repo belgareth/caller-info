@@ -107,6 +107,9 @@ class IncomingCallGenerationTracker {
             normalizedNumber.isNotBlank()
 
     @Synchronized
+    fun currentGeneration(): Long? = activeGeneration
+
+    @Synchronized
     fun invalidate(generation: Long) {
         if (activeGeneration == generation) {
             activeGeneration = null

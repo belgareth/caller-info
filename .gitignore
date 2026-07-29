@@ -20,3 +20,4 @@ local.properties
 /tdlib_extracted
 /tdlib_native
 /app/release/*.apk
+/app/release/output-metadata.json

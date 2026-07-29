@@ -144,8 +144,44 @@ class ConfigurationAuditTest {
 
         assertFalse(manifest.contains("READ_SMS"))
         assertFalse(manifest.contains("Telephony.Sms"))
-        assertTrue(gradle.contains("versionCode = 10"))
-        assertTrue(gradle.contains("versionName = \"1.1.0-test.8\""))
+        assertTrue(gradle.contains("versionCode = 11"))
+        assertTrue(gradle.contains("versionName = \"1.1.0-test.9\""))
+    }
+
+    @Test
+    fun comparisonBuildHasNoAutomaticUpdaterAndUsesMaintainedLinks() {
+        val activity = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/MainActivity.kt"
+        ).readText()
+        val gradle = sourceFile("build.gradle.kts").readText()
+
+        assertFalse(activity.contains("checkForUpdates"))
+        assertFalse(activity.contains("apkUrl"))
+        assertFalse(activity.contains("apps.rakibulcodes.com"))
+        assertFalse(activity.contains("OkHttpClient"))
+        assertFalse(gradle.contains("libs.okhttp"))
+        assertTrue(activity.contains("https://github.com/belgareth/caller-info\""))
+        assertTrue(activity.contains("https://github.com/belgareth/caller-info/releases"))
+    }
+
+    @Test
+    fun previewAndGeneratedReleaseMetadataAreNeutralAndClean() {
+        val preview = sourceFile("src/main/res/layout/layout_caller_info_card_content.xml")
+            .readText()
+        val ignore = listOf(File("../.gitignore"), File(".gitignore"))
+            .first { it.exists() }
+            .readText()
+
+        assertTrue(preview.contains("tools:text=\"Sample caller\""))
+        assertTrue(preview.contains("tools:text=\"0000000000\""))
+        assertTrue(preview.contains("tools:text=\"sample@example.invalid\""))
+        assertFalse(
+            listOf(
+                File("release/output-metadata.json"),
+                File("app/release/output-metadata.json")
+            ).any { it.exists() }
+        )
+        assertTrue(ignore.contains("/app/release/output-metadata.json"))
     }
 
     private fun sourceFile(relativePath: String): File {

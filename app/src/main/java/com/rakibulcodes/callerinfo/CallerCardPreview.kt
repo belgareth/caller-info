@@ -10,14 +10,18 @@ class OverlayPresentationState {
     var mode: OverlayPresentationMode = OverlayPresentationMode.NONE
         private set
 
+    var activeCallGeneration: Long? = null
+        private set
+
     fun beginPreview(): Boolean {
         if (mode != OverlayPresentationMode.NONE) return false
         mode = OverlayPresentationMode.PREVIEW
         return true
     }
 
-    fun beginRealCall() {
+    fun beginRealCall(generation: Long) {
         mode = OverlayPresentationMode.REAL_CALL
+        activeCallGeneration = generation
     }
 
     fun dismissPreview(): Boolean {
@@ -28,8 +32,14 @@ class OverlayPresentationState {
 
     fun shouldAutoDismissPreview(): Boolean = mode == OverlayPresentationMode.PREVIEW
 
+    fun canClearIncoming(generation: Long): Boolean =
+        generation >= 0 &&
+            mode == OverlayPresentationMode.REAL_CALL &&
+            activeCallGeneration == generation
+
     fun clear() {
         mode = OverlayPresentationMode.NONE
+        activeCallGeneration = null
     }
 }
 
@@ -45,7 +55,7 @@ data class CallerCardPreviewData(
 fun createCallerCardPreviewData(nowMillis: Long): CallerCardPreviewData =
     CallerCardPreviewData(
         name = "Sample caller",
-        number = "+1234567890",
+        number = "0000000000",
         detail = "Preview only",
         recentCall = RecentCallInteraction(
             type = RecentCallType.INCOMING,

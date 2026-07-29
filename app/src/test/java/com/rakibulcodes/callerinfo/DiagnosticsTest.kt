@@ -82,7 +82,7 @@ class DiagnosticsTest {
         val preview = createCallerCardPreviewData(3_600_000L)
 
         assertEquals("Sample caller", preview.name)
-        assertEquals("+1234567890", preview.number)
+        assertEquals("0000000000", preview.number)
         assertEquals(RecentCallType.INCOMING, preview.recentCall.type)
         assertEquals(0L, preview.recentCall.timestampMillis)
         assertEquals(NumberVerificationState.PASSED, preview.verificationState)
@@ -104,12 +104,25 @@ class DiagnosticsTest {
         val state = OverlayPresentationState()
         state.beginPreview()
 
-        state.beginRealCall()
+        state.beginRealCall(7)
 
         assertEquals(OverlayPresentationMode.REAL_CALL, state.mode)
         assertFalse(state.beginPreview())
         assertFalse(state.dismissPreview())
         assertFalse(state.shouldAutoDismissPreview())
+    }
+
+    @Test
+    fun delayedClearCannotRemoveNewerIncomingPresentation() {
+        val state = OverlayPresentationState()
+        state.beginRealCall(7)
+        state.beginRealCall(8)
+
+        assertFalse(state.canClearIncoming(7))
+        assertEquals(OverlayPresentationMode.REAL_CALL, state.mode)
+        assertTrue(state.canClearIncoming(8))
+        state.clear()
+        assertEquals(OverlayPresentationMode.NONE, state.mode)
     }
 
     @Test

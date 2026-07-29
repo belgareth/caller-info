@@ -1285,14 +1285,14 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="apps.rakibulcodes.com/caller-info"
+                                android:text="Releases"
                                 android:textAppearance="?attr/textAppearanceTitleMedium"
                                 android:textStyle="bold" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="Official app website and updates"
+                                android:text="github.com/belgareth/caller-info/releases"
                                 android:textAppearance="?attr/textAppearanceBodySmall"
                                 android:textColor="?attr/colorOnSurfaceVariant" />
                         </LinearLayout>
@@ -1343,7 +1343,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="github.com/rakibulcodes/caller-info"
+                                android:text="github.com/belgareth/caller-info"
                                 android:textAppearance="?attr/textAppearanceBodySmall"
                                 android:textColor="?attr/colorOnSurfaceVariant" />
                         </LinearLayout>

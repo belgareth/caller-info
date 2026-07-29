@@ -38,14 +38,11 @@ import com.rakibulcodes.callerinfo.data.TelegramManager
 import com.rakibulcodes.callerinfo.data.database.CallerInfoEntity
 import com.rakibulcodes.callerinfo.databinding.ActivityMainBinding
 import com.google.android.material.color.MaterialColors
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.drinkless.tdlib.TdApi
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -57,6 +54,9 @@ class MainActivity : AppCompatActivity() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var latestLookupResult: CallerInfoEntity? = null
     private var updatingRecentCallSwitch = false
+    private val manualLookupGeneration = com.rakibulcodes.callerinfo.data.RequestGenerationTracker()
+    private var manualLookupJob: Job? = null
+    private var activeManualLookupGeneration: Long? = null
 
     private val roleRequestLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
@@ -94,7 +94,6 @@ class MainActivity : AppCompatActivity() {
         observeTelegramState()
 
         setupNetworkListener()
-        checkForUpdates()
     }
 
     private fun setupNetworkListener() {
@@ -119,6 +118,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        cancelManualLookup()
         if (::binding.isInitialized) {
             binding.etNumberFormattingPreview.text?.clear()
             binding.tvNumberFormattingPreviewResult.text = ""
@@ -129,80 +129,6 @@ class MainActivity : AppCompatActivity() {
             val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             connectivityManager.unregisterNetworkCallback(it)
         }
-    }
-
-    private fun checkForUpdates() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                // Official update source
-                val updateUrl = "https://apps.rakibulcodes.com/caller-info/version.json"
-                
-                val request = Request.Builder()
-                    .url(updateUrl)
-                    .build()
-
-                val client = OkHttpClient()
-                val response = client.newCall(request).execute()
-
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string() ?: return@launch
-                    val json = JSONObject(responseBody)
-                    
-                    val latestVersionCode = json.optInt("versionCode", 1)
-                    val apkUrl = json.optString("apkUrl", "")
-                    
-                    val pInfo = packageManager.getPackageInfo(packageName, 0)
-                    val currentVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        pInfo.longVersionCode.toInt()
-                    } else {
-                        @Suppress("DEPRECATION")
-                        pInfo.versionCode
-                    }
-
-                    if (latestVersionCode > currentVersionCode && apkUrl.isNotEmpty()) {
-                        withContext(Dispatchers.Main) {
-                            showUpdateDialog(
-                                apkUrl, 
-                                json.optString("versionName", ""),
-                                json.optString("releaseDate", ""),
-                                json.optJSONArray("notes")?.let { array ->
-                                    List(array.length()) { i -> array.getString(i) }
-                                } ?: emptyList()
-                            )
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    private fun showUpdateDialog(apkUrl: String, versionName: String, releaseDate: String, notes: List<String>) {
-        val message = StringBuilder()
-        message.append("A new version ($versionName) is available.\n")
-        if (releaseDate.isNotEmpty()) {
-            message.append("Release Date: $releaseDate\n")
-        }
-        if (notes.isNotEmpty()) {
-            message.append("\nWhat's New:\n")
-            notes.forEach { note ->
-                message.append("• $note\n")
-            }
-        } else {
-            message.append("\nPlease update to continue using Caller Info Test.")
-        }
-
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle("Update Available")
-            .setMessage(message.toString().trim())
-            .setPositiveButton("Download") { _, _ ->
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl))
-                startActivity(intent)
-            }
-            .setNegativeButton("Later", null)
-            .setCancelable(false)
-            .show()
     }
 
     private fun initializeUI() {
@@ -237,6 +163,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnClearSearch.setOnClickListener {
+            cancelManualLookup()
             binding.etLookupNumber.text?.clear()
             binding.resultLayout.visibility = View.GONE
             binding.btnClearSearch.visibility = View.GONE
@@ -271,16 +198,24 @@ class MainActivity : AppCompatActivity() {
         }
 
         // About section listeners
-        binding.cardOfficialWebsite.setOnClickListener { openUrl("https://apps.rakibulcodes.com/caller-info") }
-        binding.cardSourceCode.setOnClickListener { openUrl("https://github.com/rakibulcodes/caller-info") }
-        binding.btnInfoWebsite.setOnClickListener { openUrl("https://rakibulcodes.com") }
-        binding.btnInfoGithub.setOnClickListener { openUrl("https://github.com/rakibulcodes") }
+        binding.cardOfficialWebsite.setOnClickListener {
+            openUrl("https://github.com/belgareth/caller-info/releases")
+        }
+        binding.cardSourceCode.setOnClickListener {
+            openUrl("https://github.com/belgareth/caller-info")
+        }
+        binding.btnInfoWebsite.setOnClickListener {
+            openUrl("https://github.com/belgareth/caller-info/releases")
+        }
+        binding.btnInfoGithub.setOnClickListener {
+            openUrl("https://github.com/belgareth/caller-info")
+        }
 
         try {
             val pInfo = packageManager.getPackageInfo(packageName, 0)
             binding.appVersionText.text = "Version ${pInfo.versionName}"
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
+            binding.appVersionText.text = ""
         }
 
         binding.permissionWarning.setOnClickListener {
@@ -1209,26 +1144,57 @@ class MainActivity : AppCompatActivity() {
             tvError.visibility = View.GONE
         }
 
-        lifecycleScope.launch {
-            var localDisplayed = false
-            val lookupResult = repository.getCallerInfoWithSource(
-                rawNumber = number,
-                onLocalResult = { localResult ->
-                    localDisplayed = true
-                    updateResultUI(localResult.callerInfo)
+        cancelManualLookup()
+        val generation = manualLookupGeneration.begin()
+        activeManualLookupGeneration = generation
+        manualLookupJob = lifecycleScope.launch {
+            try {
+                var localDisplayed = false
+                val lookupResult = repository.getCallerInfoWithSource(
+                    rawNumber = number,
+                    onLocalResult = { localResult ->
+                        if (manualLookupGeneration.isCurrent(generation)) {
+                            localDisplayed = true
+                            updateResultUI(localResult.callerInfo)
+                        }
+                    },
+                    requestStillValid = {
+                        manualLookupGeneration.isCurrent(generation)
+                    }
+                )
+                if (!manualLookupGeneration.isCurrent(generation)) return@launch
+
+                val result = lookupResult.callerInfo
+                if (!localDisplayed || lookupResult.source == CallerLookupSource.REMOTE) {
+                    updateResultUI(result)
                 }
-            )
-            val result = lookupResult.callerInfo
-            binding.btnLookup.isEnabled = true
-            if (!localDisplayed || lookupResult.source == CallerLookupSource.REMOTE) {
-                updateResultUI(result)
-            }
-            
-            if (showNotification) {
-                val message = NotificationHelper.buildNotificationMessage(result)
-                NotificationHelper.showNotification(this@MainActivity, "Result", message, result = result)
+
+                if (showNotification && manualLookupGeneration.isCurrent(generation)) {
+                    val message = NotificationHelper.buildNotificationMessage(result)
+                    NotificationHelper.showNotification(
+                        this@MainActivity,
+                        "Result",
+                        message,
+                        result = result
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } finally {
+                if (manualLookupGeneration.isCurrent(generation)) {
+                    binding.btnLookup.isEnabled = true
+                    manualLookupGeneration.invalidate(generation)
+                    activeManualLookupGeneration = null
+                }
             }
         }
+    }
+
+    private fun cancelManualLookup() {
+        manualLookupJob?.cancel()
+        manualLookupJob = null
+        activeManualLookupGeneration?.let(manualLookupGeneration::invalidate)
+        activeManualLookupGeneration = null
     }
 
     private fun updateResultUI(info: CallerInfoEntity) {

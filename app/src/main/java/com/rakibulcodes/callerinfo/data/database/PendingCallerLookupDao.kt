@@ -51,6 +51,18 @@ interface PendingCallerLookupDao {
     @Query("SELECT COUNT(*) FROM pending_caller_lookup")
     suspend fun count(): Int
 
+    @Query(
+        "SELECT COUNT(*) FROM pending_caller_lookup " +
+            "WHERE nextEligibleRetryTimestampMillis <= :nowMillis"
+    )
+    suspend fun eligibleCount(nowMillis: Long): Int
+
+    @Query(
+        "SELECT MIN(nextEligibleRetryTimestampMillis) FROM pending_caller_lookup " +
+            "WHERE nextEligibleRetryTimestampMillis > :nowMillis"
+    )
+    suspend fun earliestFutureEligible(nowMillis: Long): Long?
+
     @Transaction
     suspend fun insertBounded(item: PendingCallerLookupEntity, limit: Int): Boolean {
         val inserted = insertIfAbsent(item) != -1L

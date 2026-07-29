@@ -47,9 +47,7 @@ class OfflineCallerCacheAuditTest {
     fun onlyUsefulCurrentRemoteResultsAreSaved() {
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(repository.contains("canAcceptResult(number, remote.callerInfo"))
-        assertTrue(repository.contains("callerInfo.number == number"))
-        assertTrue(repository.contains("requestStillValid()"))
+        assertTrue(repository.contains("isCallerRecordSafeToPersist"))
         assertTrue(repository.contains("hasUsefulCallerInformation(callerInfo)"))
         assertTrue(repository.contains("lastSuccessfullyUpdatedMillis = savedAt"))
         assertFalse(repository.contains("insertCallerInfo(finalResult)"))
@@ -63,8 +61,8 @@ class OfflineCallerCacheAuditTest {
 
         assertTrue(presentIndex >= 0)
         assertTrue(refreshIndex > presentIndex)
-        assertTrue(repository.contains("inFlightRefreshes[number]"))
-        assertTrue(repository.contains("inFlightRefreshes.remove(number, created)"))
+        assertTrue(repository.contains("singleFlight.run(number)"))
+        assertTrue(repository.contains("REMOTE_TRANSACTION_COORDINATOR.run"))
     }
 
     @Test
@@ -102,24 +100,26 @@ class OfflineCallerCacheAuditTest {
         assertTrue(worker.contains("bounded_offline_caller_lookup"))
         assertTrue(repository.contains("CallerCachePolicy.MAXIMUM_ITEMS_PER_RUN"))
         assertFalse(worker.contains("delay("))
-        assertFalse(worker.contains("setInitialDelay"))
+        assertTrue(worker.contains("setInitialDelay"))
     }
 
     @Test
-    fun permanentAndNonconnectivityFailuresRemoveExistingRetries() {
+    fun onlyDurableSuccessAndPermanentNotFoundRemoveExistingRetries() {
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(repository.contains("is RemoteLookupOutcome.PermanentNotFound -> {"))
-        assertTrue(repository.contains("RemoteLookupOutcome.AuthenticationFailure -> {"))
-        assertTrue(repository.contains("RemoteLookupOutcome.ParsingFailure -> {"))
-        assertTrue(repository.contains("removePending(number)"))
+        assertTrue(repository.contains("RemoteLookupOutcome.PermanentNotFound -> {"))
+        assertTrue(repository.contains("RemoteLookupOutcome.AuthenticationFailure,"))
+        assertTrue(repository.contains("RemoteLookupOutcome.ParsingFailure,"))
+        assertTrue(repository.contains("removePendingAfterSave = true"))
+        assertTrue(repository.contains("db.withTransaction"))
+        assertTrue(repository.contains("SaveCallerResult.Failed ->"))
     }
 
     @Test
     fun staleRequestsAndNoncanonicalQueueRowsCannotBeRetried() {
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(repository.contains("if (requestStillValid()) {\n                    queueConnectivityRetry(number)"))
+        assertTrue(repository.contains("if (requestStillValid()) queueConnectivityRetry(number)"))
         assertTrue(repository.contains("val canonicalNumber = sanitizeNumber(item.normalizedNumber)"))
         assertTrue(repository.contains("canonicalNumber != item.normalizedNumber"))
     }
@@ -135,7 +135,7 @@ class OfflineCallerCacheAuditTest {
         assertTrue(repository.contains("db.pendingCallerLookupDao().clearAll()"))
         assertFalse(repository.contains(".clear()"))
         assertTrue(repository.contains("cacheEpoch.incrementAndGet()"))
-        assertTrue(repository.contains("cacheEpoch.get() != expectedCacheEpoch"))
+        assertTrue(repository.contains("currentCacheEpoch = cacheEpoch::get"))
     }
 
     @Test
