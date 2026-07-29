@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -12,8 +14,8 @@ android {
         applicationId = "com.rakibulcodes.callerinfo.test"
         minSdk = 29
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.1.0-test.7"
+        versionCode = 10
+        versionName = "1.1.0-test.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -42,6 +44,11 @@ android {
     buildFeatures {
         viewBinding = true
     }
+}
+
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "256m"
+    maxParallelForks = 1
 }
 
 dependencies {

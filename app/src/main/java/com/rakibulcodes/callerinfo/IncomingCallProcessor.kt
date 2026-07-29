@@ -5,12 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.ContactsContract
 import android.telephony.TelephonyManager
-import androidx.work.Constraints
-import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.rakibulcodes.callerinfo.data.CallerInfoRepository
 
 object IncomingCallProcessor {
@@ -35,34 +29,69 @@ object IncomingCallProcessor {
 
         if (lookupKnown || !numberInContacts) {
             val repository = CallerInfoRepository.getInstance(context)
-            val lookupResult = repository.getCallerInfoWithSource(normalizedNumber)
+            var localPresented = false
+            val lookupResult = repository.getCallerInfoWithSource(
+                rawNumber = normalizedNumber,
+                onLocalResult = { localResult ->
+                    localPresented = true
+                    presentResult(
+                        context,
+                        localResult,
+                        incomingCallStartMillis,
+                        verificationState,
+                        generation,
+                        normalizedNumber,
+                        isCurrent
+                    )
+                },
+                requestStillValid = { isCurrent(generation, normalizedNumber) }
+            )
             val result = lookupResult.callerInfo
             if (!isCurrent(generation, normalizedNumber)) return
-            
-            if (result.error == "No internet connection") {
-                scheduleOfflineLookup(context, normalizedNumber)
-            } else if (isCallStillActive(context)) {
-                if (!isCurrent(generation, normalizedNumber)) return
-                val overlayIntent = Intent(context, CallerOverlayService::class.java).apply {
-                    putExtra("number", result.number)
-                    putExtra("name", result.name)
-                    putExtra("carrier", result.carrier)
-                    putExtra("country", result.country)
-                    putExtra("location", result.location)
-                    putExtra("email", result.email)
-                    putExtra("error", result.error)
-                    putExtra("incoming_call_start", incomingCallStartMillis)
-                    putExtra("verification_state", verificationState.name)
-                    putExtra("lookup_source", lookupResult.source.name)
-                    putExtra("call_generation", generation)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startService(overlayIntent)
-            } else {
-                if (!isCurrent(generation, normalizedNumber)) return
-                val message = NotificationHelper.buildNotificationMessage(result)
-                NotificationHelper.showNotification(context, result.number, message, result = result)
+            if (localPresented && lookupResult.source == CallerLookupSource.LOCAL) return
+            presentResult(
+                context,
+                lookupResult,
+                incomingCallStartMillis,
+                verificationState,
+                generation,
+                normalizedNumber,
+                isCurrent
+            )
+        }
+    }
+
+    private fun presentResult(
+        context: Context,
+        lookupResult: CallerLookupResult,
+        incomingCallStartMillis: Long,
+        verificationState: NumberVerificationState,
+        generation: Long,
+        normalizedNumber: String,
+        isCurrent: (Long, String) -> Boolean
+    ) {
+        if (!isCurrent(generation, normalizedNumber)) return
+        val result = lookupResult.callerInfo
+        if (result.error == "No internet connection") return
+        if (isCallStillActive(context)) {
+            val overlayIntent = Intent(context, CallerOverlayService::class.java).apply {
+                putExtra("number", result.number)
+                putExtra("name", result.name)
+                putExtra("carrier", result.carrier)
+                putExtra("country", result.country)
+                putExtra("location", result.location)
+                putExtra("email", result.email)
+                putExtra("error", result.error)
+                putExtra("incoming_call_start", incomingCallStartMillis)
+                putExtra("verification_state", verificationState.name)
+                putExtra("lookup_source", lookupResult.source.name)
+                putExtra("call_generation", generation)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            context.startService(overlayIntent)
+        } else {
+            val message = NotificationHelper.buildNotificationMessage(result)
+            NotificationHelper.showNotification(context, result.number, message, result = result)
         }
     }
 
@@ -92,22 +121,4 @@ object IncomingCallProcessor {
         }
     }
 
-    private fun scheduleOfflineLookup(context: Context, number: String) {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-            
-        val data = workDataOf("number" to number)
-
-        val workRequest = OneTimeWorkRequestBuilder<OfflineLookupWorker>()
-            .setConstraints(constraints)
-            .setInputData(data)
-            .build()
-
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "offline_lookup_$number",
-            ExistingWorkPolicy.REPLACE,
-            workRequest
-        )
-    }
 }

@@ -22,12 +22,19 @@ fun visibleLookupSource(
     source.takeIf { settingEnabled && hasCallerInformation }
 
 fun hasDisplayableCallerInformation(callerInfo: CallerInfoEntity): Boolean =
-    hasDisplayableCallerInformation(
-        name = callerInfo.name,
-        carrier = callerInfo.carrier,
-        email = callerInfo.email,
-        hasError = callerInfo.error != null
-    )
+    hasUsefulCallerInformation(callerInfo)
+
+fun hasUsefulCallerInformation(callerInfo: CallerInfoEntity): Boolean =
+    callerInfo.error == null &&
+        (
+            !callerInfo.name.isNullOrBlank() && callerInfo.name != "Unknown" ||
+                !callerInfo.carrier.isNullOrBlank() ||
+                !callerInfo.email.isNullOrBlank() ||
+                !callerInfo.location.isNullOrBlank() ||
+                !callerInfo.address1.isNullOrBlank() ||
+                !callerInfo.address2.isNullOrBlank() ||
+                !callerInfo.country.isNullOrBlank()
+            )
 
 fun hasDisplayableCallerInformation(
     name: String?,

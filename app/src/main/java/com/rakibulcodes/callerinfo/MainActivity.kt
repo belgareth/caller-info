@@ -109,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 super.onAvailable(network)
+                OfflineLookupScheduler.enqueue(applicationContext)
                 if (telegramManager.isReady()) {
                     telegramManager.reconnect()
                 }
@@ -589,6 +590,9 @@ class MainActivity : AppCompatActivity() {
         }
         binding.switchShowLookupSource.setOnCheckedChangeListener { _, isChecked ->
             lookupSourcePreferences.setEnabled(isChecked)
+        }
+        binding.btnClearSavedCallerInfo.setOnClickListener {
+            showClearSavedCallerInformationDialog()
         }
 
         val historyOptions = arrayOf("100", "1000", "2000", "5000", "10000", "20000", "Unlimited")
@@ -1187,11 +1191,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performLookup(number: String, showNotification: Boolean) {
-        if (!telegramManager.isReady()) {
-            Toast.makeText(this, "Please complete Telegram setup first", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
         if (number.isEmpty()) {
             Toast.makeText(this, "Enter a number first", Toast.LENGTH_SHORT).show()
             return
@@ -1211,10 +1210,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            val result = repository.getCallerInfo(number)
-            
+            var localDisplayed = false
+            val lookupResult = repository.getCallerInfoWithSource(
+                rawNumber = number,
+                onLocalResult = { localResult ->
+                    localDisplayed = true
+                    updateResultUI(localResult.callerInfo)
+                }
+            )
+            val result = lookupResult.callerInfo
             binding.btnLookup.isEnabled = true
-            updateResultUI(result)
+            if (!localDisplayed || lookupResult.source == CallerLookupSource.REMOTE) {
+                updateResultUI(result)
+            }
             
             if (showNotification) {
                 val message = NotificationHelper.buildNotificationMessage(result)
@@ -1277,6 +1285,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        OfflineLookupScheduler.enqueue(applicationContext)
         if (::binding.isInitialized) {
             checkPermissions()
             val prefs = getSharedPreferences("Settings", MODE_PRIVATE)
@@ -1295,6 +1304,35 @@ class MainActivity : AppCompatActivity() {
             updateStatusIndicator(isEnabled)
             refreshAppStatus()
         }
+    }
+
+    private fun showClearSavedCallerInformationDialog() {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.clear_saved_caller_information)
+            .setMessage(R.string.clear_saved_caller_information_confirmation)
+            .setPositiveButton(R.string.clear_saved_caller_information_action) { _, _ ->
+                lifecycleScope.launch {
+                    val cleared = repository.clearSavedCallerInformation()
+                    if (cleared) {
+                        latestLookupResult = null
+                        binding.resultLayout.visibility = View.GONE
+                        loadHistory()
+                        Toast.makeText(
+                            this@MainActivity,
+                            R.string.saved_caller_information_cleared,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(
+                            this@MainActivity,
+                            R.string.saved_caller_information_clear_failed,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun setRecentCallEnabled(enabled: Boolean) {

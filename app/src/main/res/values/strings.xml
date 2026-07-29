@@ -113,6 +113,12 @@
     <string name="diagnostics">Diagnostics</string>
     <string name="show_lookup_source">Show lookup source</string>
     <string name="show_lookup_source_description">Show where caller information was found</string>
+    <string name="clear_saved_caller_information">Clear saved caller information</string>
+    <string name="clear_saved_caller_information_description">Remove caller information saved for offline use</string>
+    <string name="clear_saved_caller_information_confirmation">Remove saved caller information and pending offline retries? Number settings and service login will be kept.</string>
+    <string name="clear_saved_caller_information_action">Clear</string>
+    <string name="saved_caller_information_cleared">Saved caller information cleared</string>
+    <string name="saved_caller_information_clear_failed">Could not clear saved caller information</string>
     <string name="lookup_source_contact">Contact</string>
     <string name="lookup_source_local">Local data</string>
     <string name="lookup_source_remote">Remote lookup</string>

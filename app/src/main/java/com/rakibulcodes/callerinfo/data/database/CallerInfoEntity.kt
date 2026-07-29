@@ -14,5 +14,6 @@ data class CallerInfoEntity(
     val address1: String?,
     val address2: String?,
     val error: String?,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val lastSuccessfullyUpdatedMillis: Long? = null
 )
