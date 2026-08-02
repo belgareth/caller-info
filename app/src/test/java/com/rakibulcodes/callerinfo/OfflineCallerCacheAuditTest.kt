@@ -62,15 +62,16 @@ class OfflineCallerCacheAuditTest {
         assertTrue(presentIndex >= 0)
         assertTrue(refreshIndex > presentIndex)
         assertTrue(repository.contains("singleFlight.run(number)"))
-        assertTrue(repository.contains("REMOTE_TRANSACTION_COORDINATOR.run"))
+        assertTrue(repository.contains("RemoteBotTransactionCoordinator.run"))
     }
 
     @Test
     fun failedRefreshReturnsTheExistingLocalRecord() {
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(repository.contains("RemoteLookupOutcome.TemporarilyUnavailable -> {"))
-        assertTrue(repository.contains("queueConnectivityRetry(number)"))
+        assertTrue(repository.contains("is RemoteLookupOutcome.Failure -> {"))
+        assertTrue(repository.contains("queueRetry(number, remote.reason, lookupPendingQueueEpoch)"))
+        assertTrue(repository.contains("pendingQueueEpoch.get() != expectedPendingQueueEpoch"))
         assertTrue(repository.contains("localResult"))
         assertFalse(repository.contains("deleteByNumber(number)"))
     }
@@ -107,9 +108,8 @@ class OfflineCallerCacheAuditTest {
     fun onlyDurableSuccessAndPermanentNotFoundRemoveExistingRetries() {
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(repository.contains("RemoteLookupOutcome.PermanentNotFound -> {"))
-        assertTrue(repository.contains("RemoteLookupOutcome.AuthenticationFailure,"))
-        assertTrue(repository.contains("RemoteLookupOutcome.ParsingFailure,"))
+        assertTrue(repository.contains("RemoteLookupFailure.PERMANENT_NOT_FOUND"))
+        assertTrue(repository.contains("retryPolicyFor(outcome.reason)"))
         assertTrue(repository.contains("removePendingAfterSave = true"))
         assertTrue(repository.contains("db.withTransaction"))
         assertTrue(repository.contains("SaveCallerResult.Failed ->"))
@@ -119,7 +119,7 @@ class OfflineCallerCacheAuditTest {
     fun staleRequestsAndNoncanonicalQueueRowsCannotBeRetried() {
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(repository.contains("if (requestStillValid()) queueConnectivityRetry(number)"))
+        assertTrue(repository.contains("RemoteLookupFailure.CONNECTIVITY_UNAVAILABLE"))
         assertTrue(repository.contains("val canonicalNumber = sanitizeNumber(item.normalizedNumber)"))
         assertTrue(repository.contains("canonicalNumber != item.normalizedNumber"))
     }
@@ -129,13 +129,11 @@ class OfflineCallerCacheAuditTest {
         val activity = source("MainActivity.kt")
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(activity.contains("showClearSavedCallerInformationDialog"))
+        assertTrue(activity.contains("showClearPendingLookupsDialog"))
         assertTrue(activity.contains(".setNegativeButton(android.R.string.cancel, null)"))
-        assertTrue(repository.contains("db.callerInfoDao().clearAll()"))
+        assertTrue(repository.contains("suspend fun clearPendingLookups()"))
         assertTrue(repository.contains("db.pendingCallerLookupDao().clearAll()"))
-        assertFalse(repository.contains(".clear()"))
-        assertTrue(repository.contains("cacheEpoch.incrementAndGet()"))
-        assertTrue(repository.contains("currentCacheEpoch = cacheEpoch::get"))
+        assertTrue(repository.contains("pendingQueueEpoch.incrementAndGet()"))
     }
 
     @Test
@@ -166,7 +164,18 @@ class OfflineCallerCacheAuditTest {
 
         assertTrue(strings.contains(">Clear saved caller information</string>"))
         assertTrue(strings.contains(">Remove caller information saved for offline use</string>"))
+        assertTrue(strings.contains(">Clear pending lookups</string>"))
         assertTrue(layout.contains("btnClearSavedCallerInfo"))
+        assertTrue(layout.contains("btnClearPendingLookups"))
+    }
+
+    @Test
+    fun enteringSettingsRefreshesPendingCountFromDurableState() {
+        val activity = source("MainActivity.kt")
+        val settingsBranch = activity.substringAfter("R.id.nav_settings -> {")
+            .substringBefore("R.id.nav_info -> {")
+
+        assertTrue(settingsBranch.contains("refreshPendingLookupStatus()"))
     }
 
     private fun source(relativePath: String): String {

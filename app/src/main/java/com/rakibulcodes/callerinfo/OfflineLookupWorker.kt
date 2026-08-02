@@ -12,6 +12,7 @@ import androidx.work.WorkerParameters
 import com.rakibulcodes.callerinfo.data.CallerInfoRepository
 import com.rakibulcodes.callerinfo.data.WorkerRunAction
 import com.rakibulcodes.callerinfo.data.decideWorkerRunAction
+import com.rakibulcodes.callerinfo.data.database.AppDatabase
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 
@@ -45,15 +46,31 @@ class OfflineLookupWorker(
             boundedRetry()
         }
 
-    private fun boundedRetry(): Result =
+    private suspend fun boundedRetry(): Result =
         if (runAttemptCount + 1 < MAXIMUM_WORKER_ATTEMPTS) {
             Result.retry()
         } else {
+            val hasPending = try {
+                AppDatabase.getDatabase(applicationContext)
+                    .pendingCallerLookupDao()
+                    .count() > 0
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                true
+            }
+            if (hasPending) {
+                OfflineLookupScheduler.enqueueContinuation(
+                    applicationContext,
+                    WORK_MANAGER_EXHAUSTION_DELAY_MILLIS
+                )
+            }
             Result.success()
         }
 
     companion object {
         private const val MAXIMUM_WORKER_ATTEMPTS = 3
+        private const val WORK_MANAGER_EXHAUSTION_DELAY_MILLIS = 30 * 60 * 1000L
     }
 }
 
@@ -74,6 +91,24 @@ object OfflineLookupScheduler {
             ExistingWorkPolicy.APPEND_OR_REPLACE,
             request(initialDelayMillis)
         )
+    }
+
+    fun enqueueUserRequested(context: Context) {
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+            UNIQUE_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            request(initialDelayMillis = 0)
+        )
+    }
+
+    suspend fun enqueueAuthorizationReady(context: Context) {
+        if (
+            AppDatabase.getDatabase(context.applicationContext)
+                .pendingCallerLookupDao()
+                .count() > 0
+        ) {
+            enqueueContinuation(context, initialDelayMillis = 0)
+        }
     }
 
     private fun request(initialDelayMillis: Long) =

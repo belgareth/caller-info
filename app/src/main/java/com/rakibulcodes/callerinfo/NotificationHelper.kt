@@ -49,8 +49,43 @@ object NotificationHelper {
             notificationManager.createNotificationChannel(channel)
         }
 
+        val notification = buildNotification(
+            context = context,
+            channelId = channelId,
+            notificationId = notificationId,
+            title = title,
+            message = message,
+            isSilent = isSilent,
+            result = result
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                NotificationManagerCompat.from(context).notify(notificationId, notification)
+            }
+        } else {
+            NotificationManagerCompat.from(context).notify(notificationId, notification)
+        }
+    }
+
+    internal fun buildNotification(
+        context: Context,
+        channelId: String = CHANNEL_ID,
+        notificationId: Int = 1,
+        title: String,
+        message: String,
+        isSilent: Boolean = false,
+        result: CallerInfoEntity? = null
+    ): android.app.Notification {
         val accentColor = ContextCompat.getColor(context, R.color.notification_accent)
-        val largeIconBitmap = android.graphics.BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher)
+        val largeIconBitmap =
+            android.graphics.BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher)
+        val publicNotification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_notification_small_icon)
+            .setContentTitle(context.getString(R.string.public_caller_notification_title))
+            .setContentText(context.getString(R.string.public_caller_notification_text))
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
 
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(com.rakibulcodes.callerinfo.R.drawable.ic_notification_small_icon)
@@ -60,6 +95,8 @@ object NotificationHelper {
             .setColor(accentColor)
             .setPriority(if (isSilent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicNotification)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
 
         if (result != null) {
@@ -103,13 +140,7 @@ object NotificationHelper {
                 )
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-                NotificationManagerCompat.from(context).notify(notificationId, builder.build())
-            }
-        } else {
-            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
-        }
+        return builder.build()
     }
 
     private fun createActionPendingIntent(

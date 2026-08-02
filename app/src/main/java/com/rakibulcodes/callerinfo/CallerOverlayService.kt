@@ -11,6 +11,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.provider.ContactsContract
+import android.telephony.TelephonyManager
 import android.view.*
 import android.content.res.ColorStateList
 import android.view.animation.AccelerateInterpolator
@@ -47,6 +48,8 @@ class CallerOverlayService : Service() {
     private var pendingVerificationState = NumberVerificationState.UNAVAILABLE
     private var pendingLookupSource: CallerLookupSource? = null
     private val presentationState = OverlayPresentationState()
+    private var telephonyManager: TelephonyManager? = null
+    private var phoneStateListener: android.telephony.PhoneStateListener? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -97,20 +100,51 @@ class CallerOverlayService : Service() {
             ?: NumberVerificationState.UNAVAILABLE
         val lookupSource = intent.getStringExtra("lookup_source")
             .toEnumOrNull<CallerLookupSource>()
+        val lookupStage = intent.getStringExtra("lookup_stage")
+            .toEnumOrNull<IncomingLookupStage>()
+            ?: incomingLookupStage(
+                hasUsefulCallerInformation = hasDisplayableCallerInformation(
+                    name = name,
+                    carrier = carrier,
+                    email = email,
+                    hasError = error != null
+                ),
+                retryScheduled = false,
+                errorMessage = error
+            )
 
-        removeOverlayInternal(invalidateActiveCall = false)
+        val replacingSameCall =
+            activeCallGeneration == callGeneration && activeNormalizedNumber == number
+        if (replacingSameCall) {
+            prepareForOverlayReplacement()
+        } else {
+            removeOverlayInternal(invalidateActiveCall = false)
+        }
         activeCallGeneration = callGeneration
         activeNormalizedNumber = number
         pendingVerificationState = verificationState
         pendingLookupSource = lookupSource
         presentationState.beginRealCall(callGeneration)
-        showOverlay(number, name, carrier, country, location, email, error, false)
-        loadRecentCall(
-            number,
-            incomingCallStartMillis,
-            presentationId,
-            callGeneration
+        val overlayShown = showOverlay(
+            number = number,
+            name = name,
+            carrier = carrier,
+            country = country,
+            location = location,
+            email = email,
+            error = error,
+            lookupStage = lookupStage,
+            isPreview = false
         )
+        if (overlayShown) {
+            loadRecentCall(
+                number,
+                incomingCallStartMillis,
+                presentationId,
+                callGeneration
+            )
+        }
+        monitorCallEnd(applicationContext)
         return START_NOT_STICKY
     }
 
@@ -123,8 +157,9 @@ class CallerOverlayService : Service() {
         location: String?,
         email: String? = null,
         error: String? = null,
+        lookupStage: IncomingLookupStage,
         isPreview: Boolean
-    ) {
+    ): Boolean {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
         val prefs = getSharedPreferences("Settings", Context.MODE_PRIVATE)
@@ -141,9 +176,10 @@ class CallerOverlayService : Service() {
         val configContext = applicationContext.createConfigurationContext(nightConfig)
         val themeContext = ContextThemeWrapper(configContext, R.style.Theme_CallerInfo)
         val inflater = LayoutInflater.from(themeContext)
-        
+        val previousView = overlayView
+
         try {
-            overlayView = inflater.inflate(R.layout.layout_overlay_card, null)
+            val candidateView = inflater.inflate(R.layout.layout_overlay_card, null)
 
             val displayMetrics = resources.displayMetrics
             val screenWidth = displayMetrics.widthPixels
@@ -163,10 +199,8 @@ class CallerOverlayService : Service() {
                 else
                     @Suppress("DEPRECATION")
                     WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or 
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or 
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT
             )
             
@@ -174,34 +208,63 @@ class CallerOverlayService : Service() {
             // Use percentage of screen height for Y offset
             params?.y = if (isLandscape) (screenHeight * 0.15f).toInt() else -(screenHeight * 0.15f).toInt()
 
-            overlayView?.let { view ->
-                // Set status indicator color
+            candidateView.let { view ->
+                val hasCallerInformation = hasDisplayableCallerInformation(
+                    name = name,
+                    carrier = carrier,
+                    email = email,
+                    hasError = error != null
+                )
                 val statusIndicator = view.findViewById<View>(R.id.statusIndicator)
-                if (error != null) {
-                    statusIndicator.backgroundTintList = ColorStateList.valueOf(android.graphics.Color.parseColor("#F44336")) // Red
-                } else if (name != null && name != "Unknown") {
-                    statusIndicator.backgroundTintList = ColorStateList.valueOf(android.graphics.Color.parseColor("#4CAF50")) // Green
-                } else {
-                    statusIndicator.backgroundTintList = ColorStateList.valueOf(android.graphics.Color.parseColor("#FFC107")) // Yellow
+                val statusColor = when (lookupStage) {
+                    IncomingLookupStage.RESOLVED -> "#4CAF50"
+                    IncomingLookupStage.FAILED -> "#F44336"
+                    IncomingLookupStage.LOOKING_UP,
+                    IncomingLookupStage.RETRY_QUEUED -> "#FFC107"
                 }
+                statusIndicator.backgroundTintList =
+                    ColorStateList.valueOf(android.graphics.Color.parseColor(statusColor))
 
-                view.findViewById<TextView>(R.id.tvName).text = name ?: "Unknown"
+                view.findViewById<TextView>(R.id.tvName).text = when {
+                    lookupStage == IncomingLookupStage.LOOKING_UP ->
+                        getString(R.string.looking_up_caller)
+                    !name.isNullOrBlank() -> name
+                    else -> getString(R.string.caller_unknown)
+                }
+                view.findViewById<TextView>(R.id.tvNumber).text = number
+                val statusView = view.findViewById<TextView>(R.id.tvLookupStatus)
+                val statusText = when (lookupStage) {
+                    IncomingLookupStage.LOOKING_UP -> null
+                    IncomingLookupStage.RESOLVED -> null
+                    IncomingLookupStage.RETRY_QUEUED -> listOfNotNull(
+                        error?.takeIf(String::isNotBlank),
+                        getString(R.string.lookup_will_retry_later)
+                    ).joinToString("\n")
+                    IncomingLookupStage.FAILED -> error
+                }
+                statusView.text = statusText
+                statusView.visibility = if (statusText.isNullOrBlank()) View.GONE else View.VISIBLE
                 view.findViewById<View>(R.id.overlayActions).visibility =
-                    if (isPreview) View.GONE else View.VISIBLE
+                    if (incomingActionsVisible(lookupStage, hasCallerInformation, isPreview)) {
+                        View.VISIBLE
+                    } else {
+                        View.GONE
+                    }
                 bindVerificationBadge(view, pendingVerificationState)
                 bindLookupSource(
                     view = view,
                     source = pendingLookupSource,
-                    hasCallerInformation = hasDisplayableCallerInformation(
-                        name = name,
-                        carrier = carrier,
-                        email = email,
-                        hasError = error != null
-                    )
+                    hasCallerInformation = hasCallerInformation
                 )
 
                 val carrierText = listOfNotNull(carrier, country).joinToString(" · ")
-                view.findViewById<TextView>(R.id.tvCarrier).text = if (carrierText.isNotEmpty()) carrierText else "Unknown Carrier"
+                val carrierRow = view.findViewById<LinearLayout>(R.id.rowCarrier)
+                if (carrierText.isNotEmpty()) {
+                    view.findViewById<TextView>(R.id.tvCarrier).text = carrierText
+                    carrierRow.visibility = View.VISIBLE
+                } else {
+                    carrierRow.visibility = View.GONE
+                }
                 
                 val rowEmail = view.findViewById<LinearLayout>(R.id.rowEmail)
                 val tvEmail = view.findViewById<TextView>(R.id.tvEmail)
@@ -331,10 +394,28 @@ class CallerOverlayService : Service() {
                 }
 
                 windowManager?.addView(view, params)
+                previousView?.takeIf { it !== view }?.let { oldView ->
+                    runCatching { windowManager?.removeView(oldView) }
+                }
+                overlayView = view
+                if (!isPreview) IncomingOverlayFallbackNotification.cancel(applicationContext)
             }
+            return true
         } catch (_: Exception) {
-            presentationState.clear()
-            stopSelf()
+            if (!isPreview) {
+                IncomingOverlayFallbackNotification.show(
+                    context = applicationContext,
+                    number = number,
+                    stage = lookupStage,
+                    error = error,
+                    generation = activeCallGeneration ?: -1L
+                )
+            }
+            if (previousView == null) {
+                presentationState.clear()
+                stopSelf()
+            }
+            return false
         }
     }
 
@@ -360,6 +441,7 @@ class CallerOverlayService : Service() {
             location = null,
             email = null,
             error = null,
+            lookupStage = IncomingLookupStage.RESOLVED,
             isPreview = true
         )
         overlayView?.let { view ->
@@ -412,17 +494,28 @@ class CallerOverlayService : Service() {
         }
     }
 
+    private fun prepareForOverlayReplacement() {
+        recentCallJob?.cancel()
+        recentCallJob = null
+        previewDismissJob?.cancel()
+        previewDismissJob = null
+        stopMonitoringCallEnd()
+        presentationId++
+    }
+
     private fun removeOverlayInternal(invalidateActiveCall: Boolean = true) {
         recentCallJob?.cancel()
         recentCallJob = null
         previewDismissJob?.cancel()
         previewDismissJob = null
+        stopMonitoringCallEnd()
         presentationId++
         if (invalidateActiveCall) {
             activeCallGeneration?.let(activeIncomingCallGeneration::invalidate)
         }
         activeCallGeneration = null
         activeNormalizedNumber = null
+        IncomingOverlayFallbackNotification.cancel(applicationContext)
         pendingVerificationState = NumberVerificationState.UNAVAILABLE
         pendingLookupSource = null
         overlayView?.let {
@@ -437,6 +530,49 @@ class CallerOverlayService : Service() {
     private fun removeOverlay() {
         removeOverlayInternal()
         stopSelf()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun monitorCallEnd(context: Context) {
+        if (phoneStateListener != null) return
+        val manager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+            ?: return
+        val listener = object : android.telephony.PhoneStateListener() {
+            private var observedActiveCall = false
+
+            override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                if (state != TelephonyManager.CALL_STATE_IDLE) {
+                    observedActiveCall = true
+                    return
+                }
+                if (!observedActiveCall) return
+                val generation = activeCallGeneration ?: return
+                removeOverlay()
+                activeIncomingCallGeneration.invalidate(generation)
+            }
+        }
+        try {
+            manager.listen(listener, android.telephony.PhoneStateListener.LISTEN_CALL_STATE)
+            telephonyManager = manager
+            phoneStateListener = listener
+        } catch (_: SecurityException) {
+            // The next screening generation or user dismissal still clears the presentation.
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun stopMonitoringCallEnd() {
+        val listener = phoneStateListener
+        if (listener != null) {
+            runCatching {
+                telephonyManager?.listen(
+                    listener,
+                    android.telephony.PhoneStateListener.LISTEN_NONE
+                )
+            }
+        }
+        phoneStateListener = null
+        telephonyManager = null
     }
 
     private fun loadRecentCall(

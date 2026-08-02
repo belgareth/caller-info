@@ -16,8 +16,8 @@ public class TdApi {
     static {
         try {
             System.loadLibrary("tdjni");
-        } catch (UnsatisfiedLinkError e) {
-            e.printStackTrace();
+        } catch (UnsatisfiedLinkError ignored) {
+            // Application code reports native unavailability without exposing local paths.
         }
     }
 

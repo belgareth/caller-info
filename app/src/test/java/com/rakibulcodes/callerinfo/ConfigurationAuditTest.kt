@@ -144,8 +144,8 @@ class ConfigurationAuditTest {
 
         assertFalse(manifest.contains("READ_SMS"))
         assertFalse(manifest.contains("Telephony.Sms"))
-        assertTrue(gradle.contains("versionCode = 11"))
-        assertTrue(gradle.contains("versionName = \"1.1.0-test.9\""))
+        assertTrue(gradle.contains("versionCode = 13"))
+        assertTrue(gradle.contains("versionName = \"1.1.0-test.11\""))
     }
 
     @Test
@@ -182,6 +182,48 @@ class ConfigurationAuditTest {
             ).any { it.exists() }
         )
         assertTrue(ignore.contains("/app/release/output-metadata.json"))
+    }
+
+
+    @Test
+    fun test11PresentsImmediatelyAndKeepsDeferredLookupBounded() {
+        val screeningService = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/CallerScreeningService.kt"
+        ).readText()
+        val processor = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/IncomingCallProcessor.kt"
+        ).readText()
+        val overlay = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/CallerOverlayService.kt"
+        ).readText()
+        val worker = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/OfflineLookupWorker.kt"
+        ).readText()
+        val lockedCard = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/LockedCallerCardActivity.kt"
+        ).readText()
+        val fallback = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/IncomingOverlayFallbackNotification.kt"
+        ).readText()
+        val layout = sourceFile("src/main/res/layout/layout_overlay_card.xml").readText()
+
+        assertTrue(processor.contains("presentInitial("))
+        assertTrue(processor.indexOf("presentInitial(") < processor.indexOf("findContactName("))
+        assertTrue(processor.indexOf("presentInitial(") < processor.indexOf("getCallerInfoWithSource("))
+        assertTrue(processor.contains("retry_scheduled"))
+        assertTrue(overlay.contains("IncomingLookupStage.LOOKING_UP"))
+        assertTrue(layout.contains("@+id/tvNumber"))
+        assertTrue(layout.contains("@+id/tvLookupStatus"))
+        assertTrue(worker.contains("NetworkType.CONNECTED"))
+        assertTrue(worker.contains("enqueueUserRequested"))
+        assertTrue(screeningService.contains("IncomingCallLookupRuntime.replace"))
+        assertFalse(screeningService.contains("override fun onDestroy()"))
+        assertFalse(screeningService.contains("serviceScope.cancel()"))
+        assertTrue(screeningService.contains("LockedCallerCardController.clearCurrent(applicationContext)"))
+        assertTrue(lockedCard.contains("?.isDeviceLocked == true"))
+        assertFalse(lockedCard.contains("?.isKeyguardLocked == true"))
+        assertTrue(lockedCard.indexOf("manager.notify(NOTIFICATION_ID") < lockedCard.indexOf("monitorCallEnd(context.applicationContext)"))
+        assertTrue(fallback.indexOf("manager.notify(NOTIFICATION_ID") < fallback.indexOf("monitorCallEnd(context.applicationContext, generation)"))
     }
 
     private fun sourceFile(relativePath: String): File {

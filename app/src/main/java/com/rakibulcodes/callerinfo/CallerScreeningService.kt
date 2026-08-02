@@ -10,13 +10,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class CallerScreeningService : CallScreeningService() {
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var lookupJob: Job? = null
-
     override fun onScreenCall(callDetails: Call.Details) {
         val snapshot = captureIncomingCall(callDetails)
         val coordinator = ScreeningCoordinator(
@@ -66,13 +62,14 @@ class CallerScreeningService : CallScreeningService() {
 
     private fun dispatchIncomingCall(snapshot: IncomingCallSnapshot) {
         val previousGeneration = activeIncomingCallGeneration.currentGeneration()
-        lookupJob?.cancel()
+        IncomingOverlayFallbackNotification.cancel(applicationContext)
+        LockedCallerCardController.clearCurrent(applicationContext)
         previousGeneration?.let {
             CallerOverlayService.clearIncomingPresentation(applicationContext, it)
         }
         val generation = activeIncomingCallGeneration.begin()
 
-        lookupJob = serviceScope.launch {
+        IncomingCallLookupRuntime.replace {
             val normalizedNumber = normalizePresentedIncomingNumber(
                 input = IncomingNumberInput(
                     presentation = snapshot.presentation,
@@ -90,7 +87,7 @@ class CallerScreeningService : CallScreeningService() {
                 config = NumberFormattingPreferences.getInstance(applicationContext).getConfig()
             )
             if (!activeIncomingCallGeneration.attachNumber(generation, normalizedNumber)) {
-                return@launch
+                return@replace
             }
 
             IncomingCallProcessor.processCall(
@@ -113,10 +110,16 @@ class CallerScreeningService : CallScreeningService() {
             .setSkipNotification(false)
             .build()
 
-    override fun onDestroy() {
-        lookupJob?.cancel()
-        serviceScope.cancel()
-        super.onDestroy()
+}
+
+private object IncomingCallLookupRuntime {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var activeJob: Job? = null
+
+    @Synchronized
+    fun replace(block: suspend () -> Unit) {
+        activeJob?.cancel()
+        activeJob = scope.launch { block() }
     }
 }
 

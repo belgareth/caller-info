@@ -35,6 +35,7 @@ import kotlin.math.abs
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.rakibulcodes.callerinfo.data.CallerInfoRepository
 import com.rakibulcodes.callerinfo.data.TelegramManager
+import com.rakibulcodes.callerinfo.data.TelegramCredentials
 import com.rakibulcodes.callerinfo.data.database.CallerInfoEntity
 import com.rakibulcodes.callerinfo.databinding.ActivityMainBinding
 import com.google.android.material.color.MaterialColors
@@ -112,6 +113,12 @@ class MainActivity : AppCompatActivity() {
                 if (telegramManager.isReady()) {
                     telegramManager.reconnect()
                 }
+                runOnUiThread { refreshPendingLookupStatus() }
+            }
+
+            override fun onLost(network: Network) {
+                super.onLost(network)
+                runOnUiThread { refreshPendingLookupStatus() }
             }
         }
         connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
@@ -343,6 +350,7 @@ class MainActivity : AppCompatActivity() {
             R.id.nav_settings -> {
                 binding.toolbar.title = "Settings"
                 showSection(binding.settingsLayout)
+                refreshPendingLookupStatus()
                 invalidateOptionsMenu()
                 return true
             }
@@ -406,7 +414,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupSetupSection() {
         val prefs = getSharedPreferences("Settings", Context.MODE_PRIVATE)
-        val tgPrefs = getSharedPreferences("TelegramSettings", Context.MODE_PRIVATE)
         val numberFormattingPreferences = NumberFormattingPreferences.getInstance(this)
         
         // Initialize connection illustration - always visible
@@ -529,6 +536,28 @@ class MainActivity : AppCompatActivity() {
         binding.btnClearSavedCallerInfo.setOnClickListener {
             showClearSavedCallerInformationDialog()
         }
+        binding.btnRetryPendingLookups.setOnClickListener {
+            lifecycleScope.launch {
+                val pendingCount = repository.pendingLookupCount()
+                when {
+                    pendingCount == 0 -> Toast.makeText(
+                        this@MainActivity,
+                        R.string.retry_pending_none,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    repository.retryPendingLookupsNow() -> Toast.makeText(
+                        this@MainActivity,
+                        R.string.retry_pending_started,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                refreshPendingLookupStatus()
+            }
+        }
+        binding.btnClearPendingLookups.setOnClickListener {
+            showClearPendingLookupsDialog()
+        }
+        refreshPendingLookupStatus()
 
         val historyOptions = arrayOf("100", "1000", "2000", "5000", "10000", "20000", "Unlimited")
         val historyAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, historyOptions)
@@ -539,9 +568,12 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putString("max_history_size", text?.toString() ?: "1000").apply()
         }
 
-        binding.etAppId.setText(if (tgPrefs.getInt("api_id", 0) == 0) "" else tgPrefs.getInt("api_id", 0).toString())
-        binding.etAppHash.setText(tgPrefs.getString("api_hash", ""))
-        binding.etTelegramPhone.setText(tgPrefs.getString("phone", ""))
+        val storedCredentials = telegramManager.savedCredentials()
+        binding.etAppId.setText(
+            storedCredentials?.apiId?.takeIf { it != 0 }?.toString().orEmpty()
+        )
+        binding.etAppHash.setText(storedCredentials?.apiHash.orEmpty())
+        binding.etTelegramPhone.setText(storedCredentials?.phone.orEmpty())
 
         val themeMode = prefs.getInt("theme_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
         when (themeMode) {
@@ -642,7 +674,13 @@ class MainActivity : AppCompatActivity() {
                     setLoginStatus("Valid API ID and App Hash are required.", isError = true)
                     return
                 }
-                saveTelegramCredentials(apiId = appId, apiHash = appHash, phone = phone)
+                if (!saveTelegramCredentials(apiId = appId, apiHash = appHash, phone = phone)) {
+                    setLoginStatus(
+                        "Secure configuration is unavailable. Re-enter sign-in details.",
+                        isError = true
+                    )
+                    return
+                }
                 setLoginBusy("Connecting to Telegram...")
                 telegramManager.sendTdlibParameters(appId, appHash)
             }
@@ -652,7 +690,13 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 if (appId != null && appHash.isNotEmpty()) {
-                    saveTelegramCredentials(apiId = appId, apiHash = appHash, phone = phone)
+                    if (!saveTelegramCredentials(apiId = appId, apiHash = appHash, phone = phone)) {
+                        setLoginStatus(
+                            "Secure configuration is unavailable. Re-enter sign-in details.",
+                            isError = true
+                        )
+                        return
+                    }
                 }
                 setLoginBusy("Requesting login code...")
                 telegramManager.send(TdApi.SetAuthenticationPhoneNumber(phone, null)) { result ->
@@ -692,7 +736,7 @@ class MainActivity : AppCompatActivity() {
                 telegramManager.send(TdApi.LogOut()) { result ->
                     runOnUiThread {
                         if (result is TdApi.Error) {
-                            setLoginStatus("Logout failed: ${result.message}", isError = true)
+                            setLoginStatus("Logout failed. Try again.", isError = true)
                         } else {
                             clearTelegramCredentialsAndInputs()
                             setLoginStatus("Logged out. Enter credentials to sign in again.")
@@ -707,30 +751,17 @@ class MainActivity : AppCompatActivity() {
     private fun handleAuthActionResult(result: TdApi.Object, action: String) {
         binding.btnLoginTelegram.isEnabled = true
         if (result is TdApi.Error) {
-            setLoginStatus("Could not $action: ${result.message}", isError = true)
+            setLoginStatus("Could not $action. Try again.", isError = true)
         }
         // State change will trigger updateLoginUi with proper messaging;
         // don't show intermediate "waiting" message.
     }
 
-    private fun saveTelegramCredentials(apiId: Int, apiHash: String, phone: String) {
-        getSharedPreferences("TelegramSettings", Context.MODE_PRIVATE).edit().apply {
-            putInt("api_id", apiId)
-            putString("api_hash", apiHash)
-            putString("phone", phone)
-            apply()
-        }
-    }
+    private fun saveTelegramCredentials(apiId: Int, apiHash: String, phone: String): Boolean =
+        telegramManager.saveCredentials(TelegramCredentials(apiId, apiHash, phone))
 
     private fun clearTelegramCredentialsAndInputs() {
-        getSharedPreferences("TelegramSettings", Context.MODE_PRIVATE).edit().apply {
-            putInt("api_id", 0)
-            putString("api_hash", "")
-            putString("phone", "")
-            putBoolean("is_logged_in", false)
-            putBoolean("initial_setup_done", false)
-            apply()
-        }
+        telegramManager.clearCredentials()
 
         binding.etAppId.text?.clear()
         binding.etAppHash.text?.clear()
@@ -1269,7 +1300,41 @@ class MainActivity : AppCompatActivity() {
             
             updateStatusIndicator(isEnabled)
             refreshAppStatus()
+            refreshPendingLookupStatus()
         }
+    }
+
+    private fun refreshPendingLookupStatus() {
+        if (!::binding.isInitialized || !::repository.isInitialized) return
+        lifecycleScope.launch {
+            val count = repository.pendingLookupCount()
+            binding.tvPendingLookupCount.text = getString(
+                R.string.pending_caller_lookups_count,
+                count
+            )
+            binding.btnRetryPendingLookups.isEnabled = count > 0
+            binding.btnClearPendingLookups.isEnabled = count > 0
+        }
+    }
+
+    private fun showClearPendingLookupsDialog() {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.clear_pending_lookups)
+            .setMessage(R.string.clear_pending_lookups_confirmation)
+            .setPositiveButton(R.string.clear_pending_lookups) { _, _ ->
+                lifecycleScope.launch {
+                    val cleared = repository.clearPendingLookups()
+                    refreshPendingLookupStatus()
+                    Toast.makeText(
+                        this@MainActivity,
+                        if (cleared) R.string.pending_lookups_cleared
+                        else R.string.pending_lookups_clear_failed,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun showClearSavedCallerInformationDialog() {
@@ -1283,6 +1348,7 @@ class MainActivity : AppCompatActivity() {
                         latestLookupResult = null
                         binding.resultLayout.visibility = View.GONE
                         loadHistory()
+                        refreshPendingLookupStatus()
                         Toast.makeText(
                             this@MainActivity,
                             R.string.saved_caller_information_cleared,

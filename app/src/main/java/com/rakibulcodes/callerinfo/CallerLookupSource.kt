@@ -11,7 +11,8 @@ enum class CallerLookupSource {
 
 data class CallerLookupResult(
     val callerInfo: CallerInfoEntity,
-    val source: CallerLookupSource
+    val source: CallerLookupSource,
+    val retryScheduled: Boolean = false
 )
 
 fun visibleLookupSource(
