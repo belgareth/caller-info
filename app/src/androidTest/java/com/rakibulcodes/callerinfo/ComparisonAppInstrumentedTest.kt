@@ -33,6 +33,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.FileInputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
@@ -233,44 +236,78 @@ class ComparisonAppInstrumentedTest {
     fun lockedCallerPresentationAppearsRedactedAndHonorsGeneration() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val keyguard = context.getSystemService(KeyguardManager::class.java)
-        assertTrue(keyguard.isKeyguardLocked)
+        val originalLockDisabled = executeShell("locksettings get-disabled").trim() == "true"
+        val originallyLocked = keyguard.isKeyguardLocked
 
-        val first = activeIncomingCallGeneration.begin()
-        assertTrue(activeIncomingCallGeneration.attachNumber(first, "0000000001"))
-        val second = activeIncomingCallGeneration.begin()
-        assertTrue(activeIncomingCallGeneration.attachNumber(second, "0000000002"))
-        instrumentation.runOnMainSync {
-            LockedCallerCardController.present(
-                context,
-                second,
-                "0000000002",
+        try {
+            if (originalLockDisabled) executeShell("locksettings set-disabled false")
+            if (!keyguard.isKeyguardLocked) {
+                executeShell("input keyevent KEYCODE_SLEEP")
+                executeShell("input keyevent KEYCODE_WAKEUP")
+                awaitKeyguardState(keyguard, expectedLocked = true)
+            }
+            assertTrue(keyguard.isKeyguardLocked)
+
+            val first = activeIncomingCallGeneration.begin()
+            assertTrue(activeIncomingCallGeneration.attachNumber(first, "0000000001"))
+            val second = activeIncomingCallGeneration.begin()
+            assertTrue(activeIncomingCallGeneration.attachNumber(second, "0000000002"))
+            instrumentation.runOnMainSync {
+                LockedCallerCardController.present(
+                    context,
+                    second,
+                    "0000000002",
+                    "Sample caller",
+                    NumberVerificationState.PASSED,
+                    IncomingLookupStage.RESOLVED
+                )
+            }
+            instrumentation.waitForIdleSync()
+            val activity = resumedLockedActivity()
+            assertNotNull(activity)
+            assertEquals(
                 "Sample caller",
-                NumberVerificationState.PASSED,
-                IncomingLookupStage.RESOLVED
+                activity!!.findViewById<TextView>(R.id.lockedCallerName).text.toString()
             )
+            assertEquals(
+                "0000000002",
+                activity.findViewById<TextView>(R.id.lockedCallerNumber).text.toString()
+            )
+            instrumentation.runOnMainSync {
+                LockedCallerCardController.clear(context, first)
+            }
+            instrumentation.waitForIdleSync()
+            assertNotNull(resumedLockedActivity())
+            instrumentation.runOnMainSync {
+                LockedCallerCardController.clear(context, second)
+                activeIncomingCallGeneration.invalidate(second)
+            }
+            instrumentation.waitForIdleSync()
+            assertNull(resumedLockedActivity())
+        } finally {
+            if (originalLockDisabled) executeShell("locksettings set-disabled true")
+            if (!originallyLocked) {
+                executeShell("input keyevent KEYCODE_WAKEUP")
+                executeShell("wm dismiss-keyguard")
+                awaitKeyguardState(keyguard, expectedLocked = false)
+            }
         }
-        instrumentation.waitForIdleSync()
-        val activity = resumedLockedActivity()
-        assertNotNull(activity)
-        assertEquals(
-            "Sample caller",
-            activity!!.findViewById<TextView>(R.id.lockedCallerName).text.toString()
-        )
-        assertEquals(
-            "0000000002",
-            activity.findViewById<TextView>(R.id.lockedCallerNumber).text.toString()
-        )
-        instrumentation.runOnMainSync {
-            LockedCallerCardController.clear(context, first)
+    }
+
+    private fun executeShell(command: String): String {
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand(command)
+        return descriptor.use {
+            FileInputStream(it.fileDescriptor).bufferedReader().use { reader -> reader.readText() }
         }
-        instrumentation.waitForIdleSync()
-        assertNotNull(resumedLockedActivity())
-        instrumentation.runOnMainSync {
-            LockedCallerCardController.clear(context, second)
-            activeIncomingCallGeneration.invalidate(second)
+    }
+
+    private fun awaitKeyguardState(keyguard: KeyguardManager, expectedLocked: Boolean) {
+        val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (keyguard.isKeyguardLocked != expectedLocked && System.nanoTime() < deadlineNanos) {
+            CountDownLatch(1).await(100, TimeUnit.MILLISECONDS)
         }
-        instrumentation.waitForIdleSync()
-        assertNull(resumedLockedActivity())
+        assertEquals(expectedLocked, keyguard.isKeyguardLocked)
     }
 
     private fun resumedLockedActivity(): LockedCallerCardActivity? {

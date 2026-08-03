@@ -4,6 +4,7 @@ import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Rect
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
@@ -16,6 +17,7 @@ import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.View.OnLayoutChangeListener
 import android.view.GestureDetector
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -29,6 +31,9 @@ import android.os.PowerManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.view.GestureDetectorCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.doOnLayout
+import androidx.core.view.updatePadding
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import kotlin.math.abs
@@ -58,6 +63,11 @@ class MainActivity : AppCompatActivity() {
     private val manualLookupGeneration = com.rakibulcodes.callerinfo.data.RequestGenerationTracker()
     private var manualLookupJob: Job? = null
     private var activeManualLookupGeneration: Long? = null
+    private var initialMainContentPadding: Rect? = null
+    private val bottomClearanceUpdate = Runnable { updateBottomContentClearance() }
+    private val bottomClearanceLayoutListener = OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        scheduleBottomContentClearanceUpdate()
+    }
 
     private val roleRequestLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
@@ -127,6 +137,10 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         cancelManualLookup()
         if (::binding.isInitialized) {
+            binding.mainRoot.removeCallbacks(bottomClearanceUpdate)
+            binding.mainRoot.removeOnLayoutChangeListener(bottomClearanceLayoutListener)
+            binding.bottomNavigationContainer.removeOnLayoutChangeListener(bottomClearanceLayoutListener)
+            ViewCompat.setOnApplyWindowInsetsListener(binding.mainRoot, null)
             binding.etNumberFormattingPreview.text?.clear()
             binding.tvNumberFormattingPreviewResult.text = ""
         }
@@ -141,6 +155,7 @@ class MainActivity : AppCompatActivity() {
     private fun initializeUI() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        setupBottomContentClearance()
 
         setSupportActionBar(binding.toolbar)
 
@@ -240,6 +255,53 @@ class MainActivity : AppCompatActivity() {
         }
 
         checkPermissions()
+    }
+
+    private fun setupBottomContentClearance() {
+        val content = binding.mainContentContainer
+        initialMainContentPadding = Rect(
+            content.paddingLeft,
+            content.paddingTop,
+            content.paddingRight,
+            content.paddingBottom
+        )
+
+        binding.mainRoot.addOnLayoutChangeListener(bottomClearanceLayoutListener)
+        binding.bottomNavigationContainer.addOnLayoutChangeListener(bottomClearanceLayoutListener)
+        ViewCompat.setOnApplyWindowInsetsListener(binding.mainRoot) { _, insets ->
+            scheduleBottomContentClearanceUpdate()
+            insets
+        }
+        binding.mainRoot.doOnLayout { scheduleBottomContentClearanceUpdate() }
+        binding.bottomNavigationContainer.doOnLayout { scheduleBottomContentClearanceUpdate() }
+        ViewCompat.requestApplyInsets(binding.mainRoot)
+    }
+
+    private fun scheduleBottomContentClearanceUpdate() {
+        if (!::binding.isInitialized) return
+        binding.mainRoot.removeCallbacks(bottomClearanceUpdate)
+        binding.mainRoot.post(bottomClearanceUpdate)
+    }
+
+    private fun updateBottomContentClearance() {
+        val initialPadding = initialMainContentPadding ?: return
+        val root = binding.mainRoot
+        val bottomNavigation = binding.bottomNavigationContainer
+        if (!root.isLaidOut || !bottomNavigation.isLaidOut) return
+
+        val readableSpacing = (16f * resources.displayMetrics.density).toInt()
+        val requiredBottomPadding = BottomNavigationClearance.requiredBottomPadding(
+            rootHeight = root.height,
+            bottomNavigationTop = bottomNavigation.top,
+            stableContentBottomPadding = initialPadding.bottom,
+            readableSpacing = readableSpacing
+        )
+        binding.mainContentContainer.updatePadding(
+            left = initialPadding.left,
+            top = initialPadding.top,
+            right = initialPadding.right,
+            bottom = requiredBottomPadding
+        )
     }
 
     private fun observeTelegramState() {

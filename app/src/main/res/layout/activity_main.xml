@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mainRoot"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
@@ -39,13 +40,14 @@
         android:id="@+id/mainScrollView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:clipToPadding="false"
         android:fillViewport="true"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
         <FrameLayout
+            android:id="@+id/mainContentContainer"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="110dp">
+            android:layout_height="wrap_content">
 
             <!-- ==================== LOOKUP SECTION ==================== -->
             <LinearLayout
@@ -303,6 +305,7 @@
                         android:textColor="?attr/colorOnSurface" />
 
                     <TextView
+                        android:id="@+id/historyEmptyMessage"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
@@ -1200,6 +1203,7 @@
                     android:textStyle="bold" />
 
                 <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/settingsFinalCard"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     app:cardBackgroundColor="?attr/colorSurfaceVariant"
@@ -1234,6 +1238,8 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
+                                android:minWidth="0dp"
+                                android:paddingHorizontal="4dp"
                                 android:text="@string/theme_light" />
 
                             <com.google.android.material.button.MaterialButton
@@ -1242,6 +1248,8 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
+                                android:minWidth="0dp"
+                                android:paddingHorizontal="4dp"
                                 android:text="@string/theme_system" />
 
                             <com.google.android.material.button.MaterialButton
@@ -1250,6 +1258,8 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
+                                android:minWidth="0dp"
+                                android:paddingHorizontal="4dp"
                                 android:text="@string/theme_dark" />
 
                         </com.google.android.material.button.MaterialButtonToggleGroup>
@@ -1445,6 +1455,7 @@
 
                 <!-- Developer card -->
                 <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/developerCard"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     app:cardBackgroundColor="?attr/colorSurfaceVariant"
@@ -1517,6 +1528,7 @@
     </androidx.core.widget.NestedScrollView>
 
     <FrameLayout
+        android:id="@+id/bottomNavigationContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
