@@ -14,8 +14,8 @@ android {
         applicationId = "com.rakibulcodes.callerinfo.test"
         minSdk = 29
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.1.0-test.12"
+        versionCode = 16
+        versionName = "1.1.0-test.14"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

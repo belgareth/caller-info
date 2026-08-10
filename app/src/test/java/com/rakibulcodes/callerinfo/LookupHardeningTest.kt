@@ -30,6 +30,7 @@ import com.rakibulcodes.callerinfo.data.CallerPresentationMode
 import com.rakibulcodes.callerinfo.data.correlateFinalResponse
 import com.rakibulcodes.callerinfo.data.decideWorkerRunAction
 import com.rakibulcodes.callerinfo.data.remoteLookupFailureMessage
+import com.rakibulcodes.callerinfo.data.remapRemoteRequestIdentityAfterSendSuccess
 import com.rakibulcodes.callerinfo.data.retryPolicyFor
 import com.rakibulcodes.callerinfo.data.validateExternalLookup
 import com.rakibulcodes.callerinfo.data.ExternalLookupValidation
@@ -110,6 +111,38 @@ class LookupHardeningTest {
                 )
             )
         }
+    }
+
+    @Test
+    fun sendSuccessRemapsTemporaryMessageIdBeforeReplyCorrelation() {
+        val temporary = RemoteRequestIdentity(chatId = 9, messageId = 50)
+        val definitive = remapRemoteRequestIdentityAfterSendSuccess(
+            current = temporary,
+            updateChatId = 9,
+            oldMessageId = 50,
+            newMessageId = 55
+        )
+
+        assertEquals(RemoteRequestIdentity(9, 55), definitive)
+        assertEquals(
+            ResponseCorrelation.EXACT_REPLY,
+            correlateFinalResponse(
+                message = envelope(replyMessageId = 55, text = "FINAL").copy(messageId = 60),
+                expectedChatId = 9,
+                sentMessageId = definitive!!.messageId,
+                expectedCanonicalNumber = "canonical-a",
+                isSupportedFinalResponse = { it == "FINAL" }
+            )
+        )
+        assertEquals(
+            null,
+            remapRemoteRequestIdentityAfterSendSuccess(
+                current = temporary,
+                updateChatId = 10,
+                oldMessageId = 50,
+                newMessageId = 55
+            )
+        )
     }
 
     @Test
@@ -286,6 +319,26 @@ class LookupHardeningTest {
                 correlation = { ResponseCorrelation.EXACT_REPLY }
             )
         )
+    }
+
+    @Test
+    fun rejectedProgressThatIsNotFinalIsIgnoredInsteadOfAccepted() = runBlocking {
+        val candidates = ArrayDeque(listOf("PROGRESS", "FINAL"))
+        val accepted = awaitCorrelatedResponse(
+            timeoutMillis = 1_000,
+            next = { candidates.removeFirstOrNull() },
+            correlation = {
+                if (it == "FINAL") {
+                    ResponseCorrelation.EXACT_REPLY
+                } else {
+                    ResponseCorrelation.REJECTED
+                }
+            },
+            countsAsUncorrelated = { it == "FINAL" }
+        )
+
+        assertEquals("FINAL", (accepted as CorrelatedResponseResult.Accepted).value)
+        assertEquals(ResponseCorrelation.EXACT_REPLY, accepted.correlation)
     }
 
     @Test

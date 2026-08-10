@@ -495,20 +495,33 @@ class CallerInfoRepository(private val context: Context) {
                             RemoteLookupFailure.TEMPORARY_TRANSPORT_FAILURE
                         )
                         requestIdentity = RemoteRequestIdentity(chatId, sentMessage.id)
+                        var correlatedSentMessageId = sentMessage.id
                         val response = awaitCorrelatedResponse(
                             timeoutMillis = LookupTimeouts.FINAL_RESPONSE_MILLIS,
                             next = {
                                 fullMessageForUpdate(
                                     update = telegramManager.nextLookupUpdate(),
                                     chatId = chatId,
-                                    sentMessageId = sentMessage.id
+                                    sentMessageId = correlatedSentMessageId,
+                                    onSendSucceeded = { update ->
+                                        val currentIdentity = requestIdentity
+                                            ?: return@fullMessageForUpdate
+                                        val remapped = remapRemoteRequestIdentityAfterSendSuccess(
+                                            current = currentIdentity,
+                                            updateChatId = update.message.chatId,
+                                            oldMessageId = update.oldMessageId,
+                                            newMessageId = update.message.id
+                                        ) ?: return@fullMessageForUpdate
+                                        requestIdentity = remapped
+                                        correlatedSentMessageId = remapped.messageId
+                                    }
                                 )
                             },
                             correlation = { message ->
                                 correlateFinalResponse(
                                     message = message.toEnvelope(),
                                     expectedChatId = chatId,
-                                    sentMessageId = sentMessage.id,
+                                    sentMessageId = correlatedSentMessageId,
                                     expectedCanonicalNumber = number,
                                     isQuarantinedReply = LATE_RESPONSE_QUARANTINE::contains,
                                     isSupportedFinalResponse = ::isFinalResponse
@@ -575,12 +588,31 @@ class CallerInfoRepository(private val context: Context) {
     private suspend fun fullMessageForUpdate(
         update: TdApi.Object,
         chatId: Long,
-        sentMessageId: Long
+        sentMessageId: Long,
+        onSendSucceeded: (TdApi.UpdateMessageSendSucceeded) -> Unit
     ): TdApi.Message? = when (update) {
+        is TdApi.UpdateMessageSendSucceeded -> {
+            if (
+                update.message.chatId == chatId &&
+                update.oldMessageId == sentMessageId
+            ) {
+                onSendSucceeded(update)
+            }
+            null
+        }
+        is TdApi.UpdateMessageSendFailed -> {
+            if (
+                update.message.chatId == chatId &&
+                update.oldMessageId == sentMessageId
+            ) {
+                throw TdlibCommandFailureException(update.error.code)
+            }
+            null
+        }
         is TdApi.UpdateNewMessage -> update.message.takeIf { message ->
-            message.chatId == chatId &&
-                !message.isOutgoing &&
-                message.id > sentMessageId
+                message.chatId == chatId &&
+                    !message.isOutgoing &&
+                    message.id > sentMessageId
         }
         is TdApi.UpdateMessageContent -> {
             if (update.chatId != chatId || update.messageId <= sentMessageId) {
@@ -618,46 +650,41 @@ class CallerInfoRepository(private val context: Context) {
     }
 
     private fun isFinalResponse(text: String): Boolean =
-        !text.contains("Searching...", ignoreCase = true) &&
-            listOf(
-                "Country:",
-                "Not Found",
-                "exceeded",
-                "Says:",
-                "Name:",
-                "invalid number",
-                "Oops"
-            ).any { text.contains(it, ignoreCase = true) }
+        LegacyWorkingResponseParser.isFinalResponse(text)
+
 
     private fun classifyParsedResponse(
         number: String,
         formattedText: TdApi.FormattedText
     ): RemoteLookupOutcome {
-        val responseText = formattedText.toHtml()
-        if (responseText.contains("Not Found", ignoreCase = true)) {
-            return RemoteLookupOutcome.Failure(RemoteLookupFailure.PERMANENT_NOT_FOUND)
-        }
-        if (
-            responseText.contains("invalid number", ignoreCase = true) ||
-            responseText.contains("Oops", ignoreCase = true)
-        ) {
-            return RemoteLookupOutcome.Failure(
-                RemoteLookupFailure.PARSING_OR_PROTOCOL_FAILURE
-            )
-        }
-        if (
-            responseText.contains("exceeded your daily search limit", ignoreCase = true) ||
-            responseText.contains("Limit exceeded", ignoreCase = true)
+        // Deliberately reuse the last known live-working test.7 response parser.
+        // Newer strict correlation has already accepted this message before we get here.
+        val parsed = LegacyWorkingResponseParser.parse(number, formattedText, now())
+
+        if (parsed.error?.startsWith("Daily Limit Exceeded", ignoreCase = true) == true ||
+            parsed.error.equals("Limit Exceeded", ignoreCase = true)
         ) {
             return RemoteLookupOutcome.Failure(RemoteLookupFailure.RATE_LIMITED)
         }
 
-        val parsed = parseUsefulResponse(number, responseText)
-        return if (hasUsefulCallerInformation(parsed)) {
-            RemoteLookupOutcome.Useful(parsed)
-        } else {
-            RemoteLookupOutcome.Failure(RemoteLookupFailure.PARSING_OR_PROTOCOL_FAILURE)
+        if (parsed.error.equals("Invalid Number", ignoreCase = true)) {
+            return RemoteLookupOutcome.Failure(
+                RemoteLookupFailure.PARSING_OR_PROTOCOL_FAILURE
+            )
         }
+
+        // Keep the post-test.7 safety improvement: a parser miss must never become
+        // a persisted empty/Unknown identity. Optional Not Found fields are harmless
+        // when another useful identity field was successfully parsed.
+        if (hasUsefulCallerInformation(parsed)) {
+            return RemoteLookupOutcome.Useful(parsed.copy(error = null))
+        }
+
+        if (formattedText.text.contains("Not Found", ignoreCase = true)) {
+            return RemoteLookupOutcome.Failure(RemoteLookupFailure.PERMANENT_NOT_FOUND)
+        }
+
+        return RemoteLookupOutcome.Failure(RemoteLookupFailure.PARSING_OR_PROTOCOL_FAILURE)
     }
 
     private fun extractFormattedText(content: TdApi.MessageContent): TdApi.FormattedText? =
@@ -669,74 +696,6 @@ class CallerInfoRepository(private val context: Context) {
             is TdApi.MessageDocument -> content.caption
             else -> null
         }
-
-    private fun TdApi.FormattedText.toHtml(): String {
-        val insertions = mutableListOf<Pair<Int, String>>()
-        entities?.forEach { entity ->
-            val tag = when (entity.type) {
-                is TdApi.TextEntityTypeBold -> "strong"
-                is TdApi.TextEntityTypeCode -> "code"
-                else -> null
-            }
-            if (tag != null) {
-                insertions += entity.offset to "<$tag>"
-                insertions += entity.offset + entity.length to "</$tag>"
-            }
-        }
-        var resultText = text
-        insertions.sortedByDescending { it.first }.forEach { (offset, tag) ->
-            if (offset in 0..resultText.length) {
-                resultText =
-                    resultText.substring(0, offset) + tag + resultText.substring(offset)
-            }
-        }
-        return resultText
-    }
-
-    private fun parseUsefulResponse(number: String, responseText: String): CallerInfoEntity {
-        val names = linkedSetOf<String>()
-        var carrier: String? = null
-        var email: String? = null
-        var location: String? = null
-        var address1: String? = null
-        var address2: String? = null
-        val country = Regex(
-            "Country:\\s*([^<]+)(?:<\\/strong>)?",
-            RegexOption.IGNORE_CASE
-        ).find(responseText)?.groupValues?.get(1)?.trim()
-
-        val keyValues =
-            Regex("<strong>([^<]+?):\\s*<\\/strong>\\s*<code>(.*?)<\\/code>")
-                .findAll(responseText)
-        keyValues.forEach { match ->
-            val key = match.groupValues[1].trim().lowercase().replace(Regex("\\s"), "_")
-            val value = match.groupValues[2].replace(Regex("<[^>]*>?"), "").trim()
-            if (value.isEmpty() || value.equals("Not Found", ignoreCase = true)) return@forEach
-            when (key) {
-                "name" -> names += value
-                "carrier" -> if (carrier == null) carrier = value
-                "email" -> if (email == null) email = value
-                "location" -> if (location == null) location = value
-                "address1", "address_1" -> if (address1 == null) address1 = value
-                "address2", "address_2" -> if (address2 == null) address2 = value
-            }
-        }
-
-        val updated = now()
-        return CallerInfoEntity(
-            number = number,
-            country = country,
-            name = names.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "Unknown",
-            carrier = carrier,
-            email = email,
-            location = location,
-            address1 = address1,
-            address2 = address2,
-            error = null,
-            timestamp = updated,
-            lastSuccessfullyUpdatedMillis = updated
-        )
-    }
 
     private fun errorEntity(number: String, message: String) = CallerInfoEntity(
         number = number,

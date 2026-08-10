@@ -227,6 +227,22 @@ data class RemoteRequestIdentity(
     val messageId: Long
 )
 
+fun remapRemoteRequestIdentityAfterSendSuccess(
+    current: RemoteRequestIdentity,
+    updateChatId: Long,
+    oldMessageId: Long,
+    newMessageId: Long
+): RemoteRequestIdentity? =
+    if (
+        current.chatId == updateChatId &&
+        current.messageId == oldMessageId &&
+        newMessageId != oldMessageId
+    ) {
+        RemoteRequestIdentity(updateChatId, newMessageId)
+    } else {
+        null
+    }
+
 class LateResponseQuarantine(
     private val nowMillis: () -> Long,
     private val retentionMillis: Long = RemoteUpdatePolicy.QUARANTINE_MILLIS,
@@ -279,14 +295,13 @@ suspend fun <T : Any> awaitCorrelatedResponse(
         while (accepted == null) {
             val candidate = next() ?: continue
             val result = correlation(candidate)
-            if (
-                result == ResponseCorrelation.REJECTED &&
-                countsAsUncorrelated(candidate)
-            ) {
-                sawRejectedCandidate = true
-            } else {
-                accepted = CorrelatedResponseResult.Accepted(candidate, result)
+            if (result == ResponseCorrelation.REJECTED) {
+                if (countsAsUncorrelated(candidate)) {
+                    sawRejectedCandidate = true
+                }
+                continue
             }
+            accepted = CorrelatedResponseResult.Accepted(candidate, result)
         }
         accepted
     }

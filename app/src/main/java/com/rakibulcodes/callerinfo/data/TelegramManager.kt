@@ -108,7 +108,9 @@ class TelegramManager private constructor(private val context: Context) {
         override fun onResult(`object`: TdApi.Object) {
             when (`object`) {
                 is TdApi.UpdateNewMessage,
-                is TdApi.UpdateMessageContent -> lookupUpdates.offer(`object`)
+                is TdApi.UpdateMessageContent,
+                is TdApi.UpdateMessageSendSucceeded,
+                is TdApi.UpdateMessageSendFailed -> lookupUpdates.offer(`object`)
                 is TdApi.UpdateAuthorizationState ->
                     handleAuthState(`object`.authorizationState)
             }
