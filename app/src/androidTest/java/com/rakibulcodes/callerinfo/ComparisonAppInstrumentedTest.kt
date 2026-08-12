@@ -19,6 +19,7 @@ import com.rakibulcodes.callerinfo.data.database.AppDatabase
 import com.rakibulcodes.callerinfo.data.database.CallerInfoEntity
 import com.rakibulcodes.callerinfo.data.database.PendingCallerLookupEntity
 import com.rakibulcodes.callerinfo.data.AndroidKeystoreValueCipher
+import com.rakibulcodes.callerinfo.data.AndroidCallerCacheCodec
 import com.rakibulcodes.callerinfo.data.DatabaseKeyPlan
 import com.rakibulcodes.callerinfo.data.SecureTelegramStorage
 import com.rakibulcodes.callerinfo.data.SecureValueCipher
@@ -80,11 +81,17 @@ class ComparisonAppInstrumentedTest {
     fun roomMigrationFromTwoToThreePreservesCallerAsStale() = runBlocking {
         createVersionTwoDatabaseWithCaller()
 
-        val database = openVersionThreeDatabase()
-        val saved = database.callerInfoDao().getCallerInfo(TEST_NUMBER)
+        val database = openVersionFourDatabase()
+        val legacy = database.openHelper.readableDatabase.query(
+            "SELECT name,lastSuccessfullyUpdatedMillis FROM caller_info WHERE number = ?",
+            arrayOf(TEST_NUMBER)
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getString(0) to if (cursor.isNull(1)) null else cursor.getLong(1)
+        }
 
-        assertEquals("Sample caller", saved?.name)
-        assertNull(saved?.lastSuccessfullyUpdatedMillis)
+        assertEquals("Sample caller", legacy.first)
+        assertNull(legacy.second)
         database.close()
     }
 
@@ -92,10 +99,10 @@ class ComparisonAppInstrumentedTest {
     fun clearTransactionPreservesSettings() = runBlocking {
         val settings = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
         assertTrue(settings.edit().putBoolean(SETTING_KEY, true).commit())
-        val database = openVersionThreeDatabase()
-        database.callerInfoDao().insertCallerInfo(caller())
+        val database = openVersionFourDatabase()
+        database.callerInfoDao().insertCallerInfo(codec().encode(caller()))
         database.pendingCallerLookupDao().insertIfAbsent(
-            PendingCallerLookupEntity(TEST_NUMBER, 1, 1, 0)
+            codec().encodePending(PendingCallerLookupEntity(TEST_NUMBER, 1, 1, 0))
         )
 
         database.withTransaction {
@@ -113,15 +120,15 @@ class ComparisonAppInstrumentedTest {
     fun clearingPendingOnlyPreservesSavedCallerAndSettings() = runBlocking {
         val settings = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
         assertTrue(settings.edit().putBoolean(SETTING_KEY, true).commit())
-        val database = openVersionThreeDatabase()
-        database.callerInfoDao().insertCallerInfo(caller())
+        val database = openVersionFourDatabase()
+        database.callerInfoDao().insertCallerInfo(codec().encode(caller()))
         database.pendingCallerLookupDao().insertIfAbsent(
-            PendingCallerLookupEntity(TEST_NUMBER, 1, 1, 0)
+            codec().encodePending(PendingCallerLookupEntity(TEST_NUMBER, 1, 1, 0))
         )
 
         database.pendingCallerLookupDao().clearAll()
 
-        assertNotNull(database.callerInfoDao().getCallerInfo(TEST_NUMBER))
+        assertNotNull(database.callerInfoDao().getCallerInfo(codec().lookupKey(TEST_NUMBER)))
         assertEquals(0, database.pendingCallerLookupDao().count())
         assertTrue(settings.getBoolean(SETTING_KEY, false))
         database.close()
@@ -349,10 +356,12 @@ class ComparisonAppInstrumentedTest {
         sqlite.close()
     }
 
-    private fun openVersionThreeDatabase(): AppDatabase =
+    private fun openVersionFourDatabase(): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, DATABASE_NAME)
-            .addMigrations(AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .build()
+
+    private fun codec() = AndroidCallerCacheCodec()
 
     private fun caller() = CallerInfoEntity(
         number = TEST_NUMBER,

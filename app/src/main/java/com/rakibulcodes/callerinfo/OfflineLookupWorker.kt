@@ -102,11 +102,7 @@ object OfflineLookupScheduler {
     }
 
     suspend fun enqueueAuthorizationReady(context: Context) {
-        if (
-            AppDatabase.getDatabase(context.applicationContext)
-                .pendingCallerLookupDao()
-                .count() > 0
-        ) {
+        if (CallerInfoRepository.getInstance(context.applicationContext).pendingLookupCount() > 0) {
             enqueueContinuation(context, initialDelayMillis = 0)
         }
     }

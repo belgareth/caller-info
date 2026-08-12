@@ -144,8 +144,8 @@ class ConfigurationAuditTest {
 
         assertFalse(manifest.contains("READ_SMS"))
         assertFalse(manifest.contains("Telephony.Sms"))
-        assertTrue(gradle.contains("versionCode = 16"))
-        assertTrue(gradle.contains("versionName = \"1.1.0-test.14\""))
+        assertTrue(gradle.contains("versionCode = 17"))
+        assertTrue(gradle.contains("versionName = \"1.1.0-test.15\""))
     }
 
     @Test

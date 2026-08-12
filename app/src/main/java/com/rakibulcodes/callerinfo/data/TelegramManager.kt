@@ -201,7 +201,9 @@ class TelegramManager private constructor(private val context: Context) {
                 "en",
                 android.os.Build.MODEL,
                 android.os.Build.VERSION.RELEASE,
-                "1.1.0-test.11"
+                runCatching {
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                }.getOrNull() ?: "unknown"
             )
         )
     }

@@ -10,22 +10,41 @@ class OfflineCallerCacheAuditTest {
     fun exactNonDestructiveMigrationPreservesOldRows() {
         val database = source("data/database/AppDatabase.kt")
 
-        assertTrue(database.contains("version = 3"))
+        assertTrue(database.contains("version = 4"))
         assertTrue(database.contains("Migration(2, 3)"))
         assertTrue(database.contains("ALTER TABLE caller_info ADD COLUMN"))
         assertTrue(database.contains("lastSuccessfullyUpdatedMillis INTEGER DEFAULT NULL"))
         assertTrue(database.contains("CREATE TABLE IF NOT EXISTS pending_caller_lookup"))
+        assertTrue(database.contains("CREATE TABLE IF NOT EXISTS secure_caller_info"))
+        assertTrue(database.contains("CREATE TABLE IF NOT EXISTS secure_pending_caller_lookup"))
         assertFalse(database.contains("fallbackToDestructiveMigration"))
     }
 
     @Test
-    fun canonicalNumberIsTheOnlyCallerAndQueueKey() {
-        val caller = source("data/database/CallerInfoEntity.kt")
-        val pending = source("data/database/PendingCallerLookupEntity.kt")
+    fun plaintextLegacyPagesArePurgedAfterMigrationAndClear() {
         val repository = source("data/CallerInfoRepository.kt")
 
-        assertTrue(caller.contains("@PrimaryKey val number: String"))
-        assertTrue(pending.contains("@PrimaryKey val normalizedNumber: String"))
+        assertTrue(repository.contains("purgeDeletedPlaintextPages()"))
+        assertTrue(repository.contains("PRAGMA wal_checkpoint(TRUNCATE)"))
+        assertTrue(repository.contains("sqlite.execSQL(\"VACUUM\")"))
+        assertTrue(repository.contains("if (removedPlaintextTables)"))
+        assertTrue(repository.contains("db.callerInfoDao().clearAll()"))
+        assertTrue(repository.contains("db.pendingCallerLookupDao().clearAll()"))
+    }
+
+    @Test
+    fun canonicalNumbersAreEncryptedAndIndexedByKeyedLookupValue() {
+        val caller = source("data/database/CallerInfoEntity.kt")
+        val secure = source("data/database/SecureCallerInfoEntity.kt")
+        val pending = source("data/database/PendingCallerLookupEntity.kt")
+        val codec = source("data/CallerCacheCrypto.kt")
+        val repository = source("data/CallerInfoRepository.kt")
+
+        assertFalse(caller.contains("@Entity"))
+        assertTrue(secure.contains("@PrimaryKey val lookupKey: String"))
+        assertTrue(pending.contains("SecurePendingCallerLookupEntity"))
+        assertTrue(codec.contains("KEY_ALGORITHM_HMAC_SHA256"))
+        assertTrue(codec.contains("AES/GCM/NoPadding"))
         assertTrue(repository.contains("val number = sanitizeNumber(rawNumber)"))
         assertFalse(repository.contains("takeLast("))
         assertFalse(repository.contains("endsWith("))
@@ -77,18 +96,15 @@ class OfflineCallerCacheAuditTest {
     }
 
     @Test
-    fun retryItemsContainOnlyFourAllowedFields() {
+    fun retryPersistenceDoesNotExposePlaintextNumberColumn() {
         val pending = source("data/database/PendingCallerLookupEntity.kt")
-        val propertyLines = pending.lineSequence()
-            .map(String::trim)
-            .filter { it.startsWith("val ") || it.startsWith("@PrimaryKey val ") }
-            .toList()
+        val dao = source("data/database/PendingCallerLookupDao.kt")
 
-        assertTrue(propertyLines.size == 4)
-        assertTrue(pending.contains("normalizedNumber"))
-        assertTrue(pending.contains("createdTimestampMillis"))
-        assertTrue(pending.contains("nextEligibleRetryTimestampMillis"))
-        assertTrue(pending.contains("attemptCount"))
+        assertTrue(pending.contains("val normalizedNumber: String"))
+        assertTrue(pending.contains("val encryptedNumber: String"))
+        assertTrue(pending.contains("val lookupKey: String"))
+        assertFalse(dao.contains("normalizedNumber = :normalizedNumber"))
+        assertTrue(dao.contains("lookupKey = :lookupKey"))
     }
 
     @Test
@@ -176,6 +192,95 @@ class OfflineCallerCacheAuditTest {
             .substringBefore("R.id.nav_info -> {")
 
         assertTrue(settingsBranch.contains("refreshPendingLookupStatus()"))
+    }
+
+    @Test
+    fun lookupClearResetsOnlyCurrentLookupUi() {
+        val activity = source("MainActivity.kt")
+        val clearBlock = activity.substringAfter("binding.btnClearSearch.setOnClickListener {")
+            .substringBefore("binding.btnSave.setOnClickListener")
+
+        assertTrue(clearBlock.contains("cancelManualLookup()"))
+        assertTrue(clearBlock.contains("binding.etLookupNumber.text?.clear()"))
+        assertTrue(clearBlock.contains("binding.resultLayout.visibility = View.GONE"))
+        assertTrue(clearBlock.contains("binding.btnClearSearch.visibility = View.GONE"))
+        assertTrue(clearBlock.contains("latestLookupResult = null"))
+        assertFalse(clearBlock.contains("repository.clearHistory()"))
+        assertFalse(clearBlock.contains("clearSavedCallerInformation()"))
+        assertFalse(clearBlock.contains("clearAll()"))
+    }
+
+    @Test
+    fun historyClearFilterButtonIsRemovedWhileFiltersAndDeleteRemain() {
+        val activity = source("MainActivity.kt")
+        val strings = source("../../../../res/values/strings.xml")
+        val layout = source("../../../../res/layout/activity_main.xml")
+        val menu = sequenceOf(
+            File("src/main/res/menu/menu_history.xml"),
+            File("app/src/main/res/menu/menu_history.xml")
+        ).first(File::exists).readText()
+
+        assertFalse(activity.contains("btnHistoryClearFilter"))
+        assertFalse(activity.contains("clearHistoryFilters"))
+        assertFalse(layout.contains("btnHistoryClearFilter"))
+        assertFalse(strings.contains("clear_filter"))
+        assertTrue(layout.contains("android:id=\"@+id/etHistorySearch\""))
+        assertTrue(layout.contains("android:id=\"@+id/btnHistoryFavoritesFilter\""))
+        assertTrue(layout.contains("android:id=\"@+id/btnHistoryRecentFilter\""))
+        assertTrue(layout.contains("android:id=\"@+id/btnClearSearch\""))
+        assertTrue(layout.contains("android:text=\"Clear\""))
+        assertTrue(menu.contains("android:id=\"@+id/action_clear_all\""))
+        assertTrue(activity.contains("showClearHistoryDialog()"))
+    }
+
+    @Test
+    fun resultRefreshButtonDispatchesForcedLookup() {
+        val activity = source("MainActivity.kt")
+        val refreshBlock = activity.substringAfter("binding.btnRefreshCaller.setOnClickListener {")
+            .substringBefore("binding.btnEditCallerMetadata.setOnClickListener")
+
+        assertTrue(refreshBlock.contains("latestLookupResult?.number"))
+        assertTrue(refreshBlock.contains("binding.etLookupNumber.text?.toString().orEmpty()"))
+        assertTrue(refreshBlock.contains("performLookup(number, showNotification = false, forceRefresh = true)"))
+
+        val performLookup = activity.substringAfter("private fun performLookup(")
+            .substringBefore("private fun cancelManualLookup()")
+        assertTrue(performLookup.contains("forceRefresh: Boolean = false"))
+        assertTrue(performLookup.contains("forceRemoteRefresh = forceRefresh"))
+    }
+
+    @Test
+    fun telegramLookupStreamIncludesSendSuccessAndFailureUpdates() {
+        val manager = source("data/TelegramManager.kt")
+        val resultHandler = manager.substringAfter("inner class ResultHandler")
+            .substringBefore("fun saveCredentials")
+
+        assertTrue(resultHandler.contains("is TdApi.UpdateNewMessage"))
+        assertTrue(resultHandler.contains("is TdApi.UpdateMessageContent"))
+        assertTrue(resultHandler.contains("is TdApi.UpdateMessageSendSucceeded"))
+        assertTrue(resultHandler.contains("is TdApi.UpdateMessageSendFailed"))
+        assertTrue(resultHandler.contains("lookupUpdates.offer(`object`)"))
+    }
+
+    @Test
+    fun forcedRefreshBypassesFreshCacheShortCircuitButNormalLookupDoesNot() {
+        val repository = source("data/CallerInfoRepository.kt")
+        val localBranch = repository.substringAfter("if (local != null) {")
+            .substringBefore("if (!isNetworkAvailable()) {")
+        val freshCheckIndex = localBranch.indexOf("callerCacheIsFresh(")
+        val forceGuardIndex = localBranch.indexOf("!forceRemoteRefresh")
+        val returnLocalIndex = localBranch.indexOf("return localResult")
+        val presentLocalIndex = localBranch.indexOf("onLocalResult(localResult)")
+
+        assertTrue(forceGuardIndex >= 0)
+        assertTrue(freshCheckIndex > forceGuardIndex)
+        assertTrue(returnLocalIndex > freshCheckIndex)
+        assertTrue(presentLocalIndex > returnLocalIndex)
+
+        val refreshBranch = repository.substringAfter("return when (val remote = sharedRemoteLookup(number))")
+        assertTrue(refreshBranch.contains("is RemoteLookupOutcome.Useful ->"))
+        assertTrue(refreshBranch.contains("persistUseful(number, remote.callerInfo, lookupEpoch)"))
+        assertTrue(refreshBranch.contains("is RemoteLookupOutcome.Failure ->"))
     }
 
     private fun source(relativePath: String): String {

@@ -92,6 +92,52 @@
                 app:iconSize="14dp" />
 
         </LinearLayout>
-    </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="12dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHistoryDial"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:minWidth="0dp"
+                android:text="@string/btn_dial"
+                android:textAllCaps="false"
+                android:textSize="12sp"
+                app:cornerRadius="50dp"
+                app:icon="@drawable/ic_phone"
+                app:iconSize="14dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHistoryFavorite"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:minWidth="0dp"
+                android:text="@string/favorite"
+                android:textAllCaps="false"
+                android:textSize="12sp"
+                app:cornerRadius="50dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHistoryEdit"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:minWidth="0dp"
+                android:text="@string/edit_alias_note"
+                android:textAllCaps="false"
+                android:textSize="12sp"
+                app:cornerRadius="50dp" />
+        </LinearLayout>
+</LinearLayout>
 
 </com.google.android.material.card.MaterialCardView>

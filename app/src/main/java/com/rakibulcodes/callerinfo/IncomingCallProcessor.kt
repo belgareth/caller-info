@@ -18,6 +18,7 @@ object IncomingCallProcessor {
         normalizedNumber: String,
         incomingCallStartMillis: Long,
         verificationState: NumberVerificationState,
+        phoneAccountLabel: String?,
         generation: Long,
         isCurrent: (Long, String) -> Boolean
     ) {
@@ -32,6 +33,7 @@ object IncomingCallProcessor {
             context = context,
             incomingCallStartMillis = incomingCallStartMillis,
             verificationState = verificationState,
+            phoneAccountLabel = phoneAccountLabel,
             generation = generation,
             normalizedNumber = normalizedNumber,
             isCurrent = isCurrent
@@ -58,6 +60,7 @@ object IncomingCallProcessor {
                 ),
                 incomingCallStartMillis = incomingCallStartMillis,
                 verificationState = verificationState,
+                phoneAccountLabel = phoneAccountLabel,
                 generation = generation,
                 normalizedNumber = normalizedNumber,
                 isCurrent = isCurrent
@@ -76,13 +79,14 @@ object IncomingCallProcessor {
                     lookupResult = localResult,
                     incomingCallStartMillis = incomingCallStartMillis,
                     verificationState = verificationState,
+                    phoneAccountLabel = phoneAccountLabel,
                     generation = generation,
                     normalizedNumber = normalizedNumber,
                     isCurrent = isCurrent
                 )
             },
             requestStillValid = { isCurrent(generation, normalizedNumber) },
-            retainDeferredRetryAfterRequestEnds = false
+            retainDeferredRetryAfterRequestEnds = true
         )
         if (!isCurrent(generation, normalizedNumber)) return
         if (localPresented && lookupResult.source == CallerLookupSource.LOCAL) return
@@ -92,6 +96,7 @@ object IncomingCallProcessor {
             lookupResult = lookupResult,
             incomingCallStartMillis = incomingCallStartMillis,
             verificationState = verificationState,
+            phoneAccountLabel = phoneAccountLabel,
             generation = generation,
             normalizedNumber = normalizedNumber,
             isCurrent = isCurrent
@@ -102,6 +107,7 @@ object IncomingCallProcessor {
         context: Context,
         incomingCallStartMillis: Long,
         verificationState: NumberVerificationState,
+        phoneAccountLabel: String?,
         generation: Long,
         normalizedNumber: String,
         isCurrent: (Long, String) -> Boolean
@@ -125,6 +131,7 @@ object IncomingCallProcessor {
             retryScheduled = false,
             incomingCallStartMillis = incomingCallStartMillis,
             verificationState = verificationState,
+            phoneAccountLabel = phoneAccountLabel,
             generation = generation,
             normalizedNumber = normalizedNumber,
             isCurrent = isCurrent
@@ -136,6 +143,7 @@ object IncomingCallProcessor {
         lookupResult: CallerLookupResult,
         incomingCallStartMillis: Long,
         verificationState: NumberVerificationState,
+        phoneAccountLabel: String?,
         generation: Long,
         normalizedNumber: String,
         isCurrent: (Long, String) -> Boolean
@@ -154,6 +162,7 @@ object IncomingCallProcessor {
             retryScheduled = lookupResult.retryScheduled,
             incomingCallStartMillis = incomingCallStartMillis,
             verificationState = verificationState,
+            phoneAccountLabel = phoneAccountLabel,
             generation = generation,
             normalizedNumber = normalizedNumber,
             isCurrent = isCurrent
@@ -168,6 +177,7 @@ object IncomingCallProcessor {
         retryScheduled: Boolean,
         incomingCallStartMillis: Long,
         verificationState: NumberVerificationState,
+        phoneAccountLabel: String?,
         generation: Long,
         normalizedNumber: String,
         isCurrent: (Long, String) -> Boolean
@@ -205,7 +215,7 @@ object IncomingCallProcessor {
                     context = context,
                     generation = generation,
                     normalizedNumber = normalizedNumber,
-                    name = callerInfo.name?.takeIf { callerInfo.error == null },
+                    name = callerInfo.displayName()?.takeIf { callerInfo.error == null },
                     verificationState = verificationState,
                     lookupStage = lookupStage,
                     error = callerInfo.error
@@ -220,6 +230,7 @@ object IncomingCallProcessor {
                     retryScheduled = retryScheduled,
                     incomingCallStartMillis = incomingCallStartMillis,
                     verificationState = verificationState,
+                    phoneAccountLabel = phoneAccountLabel,
                     generation = generation,
                     normalizedNumber = normalizedNumber
                 )
@@ -235,6 +246,7 @@ object IncomingCallProcessor {
         retryScheduled: Boolean,
         incomingCallStartMillis: Long,
         verificationState: NumberVerificationState,
+        phoneAccountLabel: String?,
         generation: Long,
         normalizedNumber: String
     ) {
@@ -251,14 +263,16 @@ object IncomingCallProcessor {
 
         val overlayIntent = Intent(context, CallerOverlayService::class.java).apply {
             putExtra("number", normalizedNumber)
-            putExtra("name", callerInfo.name)
+            putExtra("name", callerInfo.displayName())
             putExtra("carrier", callerInfo.carrier)
             putExtra("country", callerInfo.country)
             putExtra("location", callerInfo.location)
             putExtra("email", callerInfo.email)
+            putExtra("user_note", callerInfo.userNote)
             putExtra("error", callerInfo.error)
             putExtra("incoming_call_start", incomingCallStartMillis)
             putExtra("verification_state", verificationState.name)
+            putExtra("phone_account_label", phoneAccountLabel)
             putExtra("lookup_source", lookupSource?.name)
             putExtra("lookup_stage", lookupStage.name)
             putExtra("retry_scheduled", retryScheduled)

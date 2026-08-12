@@ -11,6 +11,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
+import android.app.NotificationManager
 import android.os.Bundle
 import android.provider.ContactsContract
 import android.provider.Settings
@@ -23,6 +24,7 @@ import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Toast
+import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
@@ -64,6 +66,9 @@ class MainActivity : AppCompatActivity() {
     private var manualLookupJob: Job? = null
     private var activeManualLookupGeneration: Long? = null
     private var initialMainContentPadding: Rect? = null
+    private var pendingLookupCountForStatus: Int = 0
+    private var allHistoryItems: List<CallerInfoEntity> = emptyList()
+    private var historyFilter = HistoryFilter()
     private val bottomClearanceUpdate = Runnable { updateBottomContentClearance() }
     private val bottomClearanceLayoutListener = OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
         scheduleBottomContentClearanceUpdate()
@@ -85,6 +90,47 @@ class MainActivity : AppCompatActivity() {
                 showRecentCallPermissionGuidance()
             }
             refreshAppStatus()
+        }
+
+    private val exportCallerDataLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null && ::repository.isInitialized) {
+                lifecycleScope.launch {
+                    val json = repository.exportCallerData()
+                    runCatching {
+                        contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(json) }
+                            ?: error("Unable to open export destination")
+                    }.onFailure {
+                        Toast.makeText(this@MainActivity, "Export failed", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+
+    private val importCallerDataLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null && ::repository.isInitialized) {
+                lifecycleScope.launch {
+                    val text = runCatching {
+                        contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    }.getOrNull()
+                    if (text == null) {
+                        Toast.makeText(this@MainActivity, R.string.import_invalid, Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    val result = repository.importCallerData(text)
+                    if (result.invalidFile) {
+                        Toast.makeText(this@MainActivity, R.string.import_invalid, Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(
+                            this@MainActivity,
+                            getString(R.string.import_complete, result.imported, result.skipped),
+                            Toast.LENGTH_LONG
+                        ).show()
+                        loadHistory()
+                    }
+                }
+            }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -219,6 +265,17 @@ class MainActivity : AppCompatActivity() {
             shareResult(NotificationHelper.buildShareText(info))
         }
 
+        binding.btnDial.setOnClickListener {
+            latestLookupResult?.let { startActivity(buildDialIntent(it.number)) }
+        }
+        binding.btnRefreshCaller.setOnClickListener {
+            val number = latestLookupResult?.number ?: binding.etLookupNumber.text?.toString().orEmpty()
+            performLookup(number, showNotification = false, forceRefresh = true)
+        }
+        binding.btnEditCallerMetadata.setOnClickListener {
+            latestLookupResult?.let(::showEditCallerMetadataDialog)
+        }
+
         // About section listeners
         binding.cardOfficialWebsite.setOnClickListener {
             openUrl("https://github.com/belgareth/caller-info/releases")
@@ -316,6 +373,8 @@ class MainActivity : AppCompatActivity() {
         binding.tilLoginCode.visibility = View.GONE
         binding.til2faPassword.visibility = View.GONE
         binding.btnLoginTelegram.isEnabled = true
+        binding.btnDisconnectTelegram.visibility = View.GONE
+        binding.btnDisconnectTelegram.isEnabled = true
         binding.ivLinkStatus.setImageResource(R.drawable.ic_unlinked)
 
         when (state.constructor) {
@@ -349,7 +408,9 @@ class MainActivity : AppCompatActivity() {
             }
             TdApi.AuthorizationStateReady.CONSTRUCTOR -> {
                 setLoginStatus("Logged in successfully!")
-                binding.btnLoginTelegram.text = "Logout"
+                binding.btnLoginTelegram.text = getString(R.string.status_connected)
+                binding.btnLoginTelegram.isEnabled = false
+                binding.btnDisconnectTelegram.visibility = View.VISIBLE
                 binding.llInputFields.visibility = View.GONE
                 binding.ivLinkStatus.setImageResource(R.drawable.ic_linked)
                 updateStatusIndicator(getSharedPreferences("Settings", MODE_PRIVATE).getBoolean("enabled", false))
@@ -438,26 +499,99 @@ class MainActivity : AppCompatActivity() {
                     loadHistory()
                 }
             },
+            onDial = { info -> startActivity(buildDialIntent(info.number)) },
+            onFavorite = { info ->
+                lifecycleScope.launch {
+                    repository.setFavorite(info.number, !info.favorite)
+                    loadHistory()
+                }
+            },
+            onEdit = ::showEditCallerMetadataDialog,
             normalizeNumber = repository::sanitizeNumber
         )
         binding.rvHistory.layoutManager = LinearLayoutManager(this)
         binding.rvHistory.adapter = historyAdapter
         binding.rvHistory.isNestedScrollingEnabled = false
         binding.rvHistory.itemAnimator = null
+        binding.etHistorySearch.doAfterTextChanged {
+            historyFilter = historyFilter.copy(query = it?.toString().orEmpty())
+            applyHistoryFilter()
+        }
+        binding.btnHistoryFavoritesFilter.setOnClickListener {
+            historyFilter = historyFilter.copy(favoritesOnly = !historyFilter.favoritesOnly)
+            binding.btnHistoryFavoritesFilter.isChecked = historyFilter.favoritesOnly
+            applyHistoryFilter()
+        }
+        binding.btnHistoryRecentFilter.setOnClickListener {
+            historyFilter = historyFilter.copy(recentOnly = !historyFilter.recentOnly)
+            binding.btnHistoryRecentFilter.isChecked = historyFilter.recentOnly
+            applyHistoryFilter()
+        }
     }
 
     private fun loadHistory() {
         lifecycleScope.launch {
-            val history = repository.getAllHistory()
-            if (history.isEmpty()) {
-                binding.emptyState.visibility = View.VISIBLE
-                binding.rvHistory.visibility = View.GONE
-            } else {
-                binding.emptyState.visibility = View.GONE
-                binding.rvHistory.visibility = View.VISIBLE
-                historyAdapter.updateData(history)
-            }
+            allHistoryItems = repository.getAllHistory()
+            applyHistoryFilter()
         }
+    }
+
+    private fun applyHistoryFilter() {
+        if (!::historyAdapter.isInitialized) return
+        val visible = filterHistory(allHistoryItems, historyFilter, System.currentTimeMillis())
+        if (visible.isEmpty()) {
+            binding.emptyState.visibility = View.VISIBLE
+            binding.rvHistory.visibility = View.GONE
+            binding.historyEmptyMessage.text = if (allHistoryItems.isEmpty()) {
+                getString(R.string.empty_history_subtitle)
+            } else {
+                getString(R.string.no_history_matches)
+            }
+        } else {
+            binding.emptyState.visibility = View.GONE
+            binding.rvHistory.visibility = View.VISIBLE
+            historyAdapter.updateData(visible)
+        }
+    }
+
+    private fun showEditCallerMetadataDialog(info: CallerInfoEntity) {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 8, 48, 0)
+        }
+        val aliasInput = android.widget.EditText(this).apply {
+            hint = getString(R.string.alias_hint)
+            setText(info.userAlias.orEmpty())
+        }
+        val noteInput = android.widget.EditText(this).apply {
+            hint = getString(R.string.note_hint)
+            setText(info.userNote.orEmpty())
+            minLines = 2
+        }
+        container.addView(aliasInput)
+        container.addView(noteInput)
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.edit_alias_note)
+            .setView(container)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.save_metadata) { _, _ ->
+                lifecycleScope.launch {
+                    val alias = aliasInput.text?.toString()
+                    val note = noteInput.text?.toString()
+                    val updated = repository.updateUserMetadata(
+                        info.number, alias, note, info.favorite
+                    )
+                    if (updated && latestLookupResult?.number == info.number) {
+                        latestLookupResult = info.copy(
+                            userAlias = alias?.trim()?.takeIf(String::isNotBlank),
+                            userNote = note?.trim()?.takeIf(String::isNotBlank)
+                        )
+                        latestLookupResult?.let(::updateResultUI)
+                    }
+                    loadHistory()
+                }
+            }
+            .show()
     }
 
     private fun showClearHistoryDialog() {
@@ -501,6 +635,57 @@ class MainActivity : AppCompatActivity() {
             recentCallPreferences.isEnabled() && recentCallPermissionGranted
         val lookupSourcePreferences = LookupSourcePreferences.getInstance(this)
         binding.switchShowLookupSource.isChecked = lookupSourcePreferences.isEnabled()
+        val test15Preferences = Test15Preferences.getInstance(this)
+        val freshnessLabels = listOf(
+            getString(R.string.cache_7_days),
+            getString(R.string.cache_30_days),
+            getString(R.string.cache_90_days)
+        )
+        binding.etCacheFreshness.setAdapter(
+            android.widget.ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, freshnessLabels)
+        )
+        binding.etCacheFreshness.setText(
+            freshnessLabels[when (test15Preferences.cacheFreshness()) {
+                CacheFreshness.SEVEN -> 0
+                CacheFreshness.THIRTY -> 1
+                CacheFreshness.NINETY -> 2
+            }], false
+        )
+        binding.etCacheFreshness.setOnItemClickListener { _, _, position, _ ->
+            test15Preferences.setCacheFreshness(
+                listOf(CacheFreshness.SEVEN, CacheFreshness.THIRTY, CacheFreshness.NINETY)[position]
+            )
+        }
+
+        val sizeLabels = listOf(getString(R.string.card_compact), getString(R.string.card_expanded))
+        binding.etCallerCardSize.setAdapter(
+            android.widget.ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, sizeLabels)
+        )
+        binding.etCallerCardSize.setText(
+            sizeLabels[if (test15Preferences.callerCardSize() == CallerCardSize.COMPACT) 0 else 1], false
+        )
+        binding.etCallerCardSize.setOnItemClickListener { _, _, position, _ ->
+            test15Preferences.setCallerCardSize(if (position == 0) CallerCardSize.COMPACT else CallerCardSize.EXPANDED)
+        }
+
+        val positionLabels = listOf(
+            getString(R.string.card_upper), getString(R.string.card_center), getString(R.string.card_lower)
+        )
+        binding.etCallerCardPosition.setAdapter(
+            android.widget.ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, positionLabels)
+        )
+        binding.etCallerCardPosition.setText(
+            positionLabels[when (test15Preferences.callerCardPosition()) {
+                CallerCardPosition.UPPER -> 0
+                CallerCardPosition.CENTER -> 1
+                CallerCardPosition.LOWER -> 2
+            }], false
+        )
+        binding.etCallerCardPosition.setOnItemClickListener { _, _, position, _ ->
+            test15Preferences.setCallerCardPosition(
+                listOf(CallerCardPosition.UPPER, CallerCardPosition.CENTER, CallerCardPosition.LOWER)[position]
+            )
+        }
 
         fun saveNumberFormattingSettings() {
             val callingCode = binding.etCallingCode.text?.toString().orEmpty()
@@ -597,6 +782,19 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnClearSavedCallerInfo.setOnClickListener {
             showClearSavedCallerInformationDialog()
+        }
+        binding.btnExportCallerData.setOnClickListener {
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.export_caller_data)
+                .setMessage(R.string.export_privacy_warning)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.export_caller_data) { _, _ ->
+                    exportCallerDataLauncher.launch("caller-info-test15-export.json")
+                }
+                .show()
+        }
+        binding.btnImportCallerData.setOnClickListener {
+            importCallerDataLauncher.launch(arrayOf("application/json", "text/json", "text/plain"))
         }
         binding.btnRetryPendingLookups.setOnClickListener {
             lifecycleScope.launch {
@@ -701,6 +899,9 @@ class MainActivity : AppCompatActivity() {
         binding.btnLoginTelegram.setOnClickListener {
             handleTelegramLogin()
         }
+        binding.btnDisconnectTelegram.setOnClickListener {
+            showTelegramDisconnectConfirmation()
+        }
         binding.btnPreviewCallerCard.setOnClickListener {
             if (hasOverlayPermission()) {
                 CallerOverlayService.showPreview(applicationContext)
@@ -794,20 +995,35 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             TdApi.AuthorizationStateReady.CONSTRUCTOR -> {
-                setLoginBusy("Logging out...")
+                setLoginStatus(getString(R.string.telegram_connected_disconnect_advanced))
+            }
+            else -> setLoginStatus("Telegram state is not ready for this action.", isError = true)
+        }
+    }
+
+    private fun showTelegramDisconnectConfirmation() {
+        if (!telegramManager.isReady()) return
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.disconnect_telegram)
+            .setMessage(R.string.disconnect_telegram_confirmation)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.disconnect_telegram) { _, _ ->
+                setLoginBusy(getString(R.string.logging_out_telegram))
+                binding.btnDisconnectTelegram.isEnabled = false
                 telegramManager.send(TdApi.LogOut()) { result ->
                     runOnUiThread {
                         if (result is TdApi.Error) {
-                            setLoginStatus("Logout failed. Try again.", isError = true)
+                            binding.btnDisconnectTelegram.visibility = View.VISIBLE
+                            binding.btnDisconnectTelegram.isEnabled = true
+                            setLoginStatus(getString(R.string.logout_failed), isError = true)
                         } else {
                             clearTelegramCredentialsAndInputs()
-                            setLoginStatus("Logged out. Enter credentials to sign in again.")
+                            setLoginStatus(getString(R.string.logged_out_reauth))
                         }
                     }
                 }
             }
-            else -> setLoginStatus("Telegram state is not ready for this action.", isError = true)
-        }
+            .show()
     }
 
     private fun handleAuthActionResult(result: TdApi.Object, action: String) {
@@ -835,6 +1051,7 @@ class MainActivity : AppCompatActivity() {
         binding.llInputFields.visibility = View.VISIBLE
         binding.btnLoginTelegram.isEnabled = true
         binding.btnLoginTelegram.text = "Send Code"
+        binding.btnDisconnectTelegram.visibility = View.GONE
         binding.ivLinkStatus.setImageResource(R.drawable.ic_unlinked)
         binding.switchEnable.isChecked = false
     }
@@ -945,6 +1162,17 @@ class MainActivity : AppCompatActivity() {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                 roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true
         val notificationsRelevant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val powerManager = getSystemService(PowerManager::class.java)
+        val fullScreenRelevant = Build.VERSION.SDK_INT >= 34
+        val fullScreenAllowed = if (Build.VERSION.SDK_INT >= 34) {
+            getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+        } else true
+        val lastRemoteMillis = repository.lastSuccessfulRemoteLookupMillis()
+        val lastRemoteText = lastRemoteMillis?.let {
+            android.text.format.DateUtils.getRelativeTimeSpanString(
+                it, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS
+            ).toString()
+        }
         val snapshot = AppStatusSnapshot(
             callerScreeningAvailable = roleAvailable,
             callerScreeningActive =
@@ -957,7 +1185,14 @@ class MainActivity : AppCompatActivity() {
             notificationsRelevant = notificationsRelevant,
             notificationsAllowed =
                 !notificationsRelevant ||
-                    isPermissionAllowed(android.Manifest.permission.POST_NOTIFICATIONS)
+                    isPermissionAllowed(android.Manifest.permission.POST_NOTIFICATIONS),
+            telegramReady = telegramManager.isReady(),
+            fullScreenRelevant = fullScreenRelevant,
+            fullScreenAllowed = fullScreenAllowed,
+            batteryOptimizationIgnored = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                powerManager?.isIgnoringBatteryOptimizations(packageName) == true,
+            pendingLookupCount = pendingLookupCountForStatus,
+            lastRemoteLookupText = lastRemoteText
         )
 
         binding.statusItemsContainer.removeAllViews()
@@ -1014,6 +1249,23 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
             }
+            AppStatusType.FULL_SCREEN_CALLER_CARD -> {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    runCatching {
+                        startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                            data = Uri.parse("package:$packageName")
+                        })
+                    }.onFailure {
+                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:$packageName")
+                        })
+                    }
+                }
+            }
+            AppStatusType.BATTERY_OPTIMIZATION -> requestIgnoreBatteryOptimizations()
+            AppStatusType.TELEGRAM,
+            AppStatusType.PENDING_LOOKUPS,
+            AppStatusType.LAST_REMOTE_LOOKUP -> Unit
         }
     }
 
@@ -1027,9 +1279,15 @@ class MainActivity : AppCompatActivity() {
         AppStatusType.CONTACTS -> R.string.status_contacts
         AppStatusType.CALL_HISTORY -> R.string.status_call_history
         AppStatusType.NOTIFICATIONS -> R.string.status_notifications
+        AppStatusType.TELEGRAM -> R.string.status_telegram
+        AppStatusType.FULL_SCREEN_CALLER_CARD -> R.string.status_full_screen_caller_card
+        AppStatusType.BATTERY_OPTIMIZATION -> R.string.status_battery_optimization
+        AppStatusType.PENDING_LOOKUPS -> R.string.status_pending_lookups
+        AppStatusType.LAST_REMOTE_LOOKUP -> R.string.status_last_remote_lookup
     }
 
     private fun statusValueText(item: AppStatusItem): String {
+        item.detail?.let { return it }
         val value = getString(
             when (item.value) {
                 AppStatusValue.ACTIVE -> R.string.status_active
@@ -1038,6 +1296,9 @@ class MainActivity : AppCompatActivity() {
                 AppStatusValue.NOT_SELECTED -> R.string.status_not_selected
                 AppStatusValue.OPTIONAL -> R.string.status_optional
                 AppStatusValue.UNAVAILABLE -> R.string.status_unavailable
+                AppStatusValue.CONNECTED -> R.string.status_connected
+                AppStatusValue.DISCONNECTED -> R.string.status_disconnected
+                AppStatusValue.INFO -> R.string.status_unavailable
             }
         )
         return if (item.optional && item.value != AppStatusValue.OPTIONAL) {
@@ -1064,7 +1325,6 @@ class MainActivity : AppCompatActivity() {
     private fun hasAllPermissions(): Boolean {
         val permissions = mutableListOf(
             android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CONTACTS,
             android.Manifest.permission.ACCESS_NETWORK_STATE
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1080,8 +1340,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkPermissions() {
         val permissions = mutableListOf(
-            android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CONTACTS
+            android.Manifest.permission.READ_PHONE_STATE
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -1133,8 +1392,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun promptForPermissions() {
         val permissions = mutableListOf(
-            android.Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.READ_CONTACTS
+            android.Manifest.permission.READ_PHONE_STATE
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -1209,7 +1467,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveResultAsContact(info: CallerInfoEntity) {
-        val displayName = info.name?.takeIf { it.isNotBlank() } ?: "Unknown"
+        val displayName = info.displayName()?.takeIf { it.isNotBlank() } ?: "Unknown"
         val insertIntent = Intent(ContactsContract.Intents.Insert.ACTION).apply {
             type = ContactsContract.RawContacts.CONTENT_TYPE
             putExtra(ContactsContract.Intents.Insert.NAME, displayName)
@@ -1218,7 +1476,7 @@ class MainActivity : AppCompatActivity() {
         startActivity(insertIntent)
     }
 
-    private fun performLookup(number: String, showNotification: Boolean) {
+    private fun performLookup(number: String, showNotification: Boolean, forceRefresh: Boolean = false) {
         if (number.isEmpty()) {
             Toast.makeText(this, "Enter a number first", Toast.LENGTH_SHORT).show()
             return
@@ -1253,7 +1511,8 @@ class MainActivity : AppCompatActivity() {
                     },
                     requestStillValid = {
                         manualLookupGeneration.isCurrent(generation)
-                    }
+                    },
+                    forceRemoteRefresh = forceRefresh
                 )
                 if (!manualLookupGeneration.isCurrent(generation)) return@launch
 
@@ -1293,7 +1552,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateResultUI(info: CallerInfoEntity) {
         latestLookupResult = info
         with(binding.cardContent) {
-            tvName.text = info.name ?: "Unknown"
+            tvName.text = info.displayName() ?: "Unknown"
             tvNumber.text = info.number
             
             val carrierText = listOfNotNull(info.carrier, info.country).joinToString(", ")
@@ -1314,6 +1573,14 @@ class MainActivity : AppCompatActivity() {
             }
 
             val fullAddress = listOfNotNull(info.address1, info.address2).joinToString("\n")
+            tvUserNote.visibility = if (!info.userNote.isNullOrBlank()) View.VISIBLE else View.GONE
+            if (!info.userNote.isNullOrBlank()) tvUserNote.text = info.userNote
+            tvTime.visibility = View.VISIBLE
+            tvTime.text = info.lastSuccessfullyUpdatedMillis?.let {
+                "Updated " + android.text.format.DateUtils.getRelativeTimeSpanString(
+                    it, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS
+                )
+            } ?: "Not refreshed"
             if (fullAddress.isNotEmpty()) {
                 tvAddress.text = fullAddress
                 tvAddress.visibility = View.VISIBLE
@@ -1370,12 +1637,14 @@ class MainActivity : AppCompatActivity() {
         if (!::binding.isInitialized || !::repository.isInitialized) return
         lifecycleScope.launch {
             val count = repository.pendingLookupCount()
+            pendingLookupCountForStatus = count
             binding.tvPendingLookupCount.text = getString(
                 R.string.pending_caller_lookups_count,
                 count
             )
             binding.btnRetryPendingLookups.isEnabled = count > 0
             binding.btnClearPendingLookups.isEnabled = count > 0
+            refreshAppStatus()
         }
     }
 

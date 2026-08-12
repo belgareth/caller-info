@@ -14,68 +14,49 @@ class HistoryAdapter(
     private val onCopy: (CallerInfoEntity) -> Unit,
     private val onShare: (CallerInfoEntity) -> Unit,
     private val onDelete: (CallerInfoEntity) -> Unit,
+    private val onDial: (CallerInfoEntity) -> Unit,
+    private val onFavorite: (CallerInfoEntity) -> Unit,
+    private val onEdit: (CallerInfoEntity) -> Unit,
     private val normalizeNumber: (String) -> String
-) :
-    RecyclerView.Adapter<HistoryAdapter.ViewHolder>() {
+) : RecyclerView.Adapter<HistoryAdapter.ViewHolder>() {
 
     class ViewHolder(val binding: ItemHistoryCardBinding) : RecyclerView.ViewHolder(binding.root)
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-        val binding = ItemHistoryCardBinding.inflate(
-            LayoutInflater.from(parent.context),
-            parent,
-            false
-        )
-        return ViewHolder(binding)
-    }
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder = ViewHolder(
+        ItemHistoryCardBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+    )
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
-        
         with(holder.binding.cardContent) {
-            tvName.text = item.name ?: "Unknown"
+            tvName.text = item.displayName() ?: "Unknown"
             tvNumber.text = item.number
-
             val carrierText = listOfNotNull(item.carrier, item.country).joinToString(", ")
             tvCarrier.text = if (carrierText.isNotEmpty()) carrierText else "Unknown Carrier"
-
-            // Show additional fields if they exist
-            if (!item.email.isNullOrEmpty()) {
-                tvEmail.text = item.email
-                tvEmail.visibility = View.VISIBLE
-            } else {
-                tvEmail.visibility = View.GONE
-            }
-
-            if (!item.location.isNullOrEmpty()) {
-                tvLocation.text = item.location
-                tvLocation.visibility = View.VISIBLE
-            } else {
-                tvLocation.visibility = View.GONE
-            }
-
+            tvEmail.visibility = if (!item.email.isNullOrEmpty()) View.VISIBLE else View.GONE
+            if (!item.email.isNullOrEmpty()) tvEmail.text = item.email
+            tvLocation.visibility = if (!item.location.isNullOrEmpty()) View.VISIBLE else View.GONE
+            if (!item.location.isNullOrEmpty()) tvLocation.text = item.location
             val fullAddress = listOfNotNull(item.address1, item.address2).joinToString("\n")
-            if (fullAddress.isNotEmpty()) {
-                tvAddress.text = fullAddress
-                tvAddress.visibility = View.VISIBLE
-            } else {
-                tvAddress.visibility = View.GONE
-            }
-
+            tvAddress.visibility = if (fullAddress.isNotEmpty()) View.VISIBLE else View.GONE
+            if (fullAddress.isNotEmpty()) tvAddress.text = fullAddress
+            tvUserNote.visibility = if (!item.userNote.isNullOrBlank()) View.VISIBLE else View.GONE
+            if (!item.userNote.isNullOrBlank()) tvUserNote.text = item.userNote
             tvTime.visibility = View.VISIBLE
-            tvTime.text = getShortTimeSpan(item.timestamp)
+            tvTime.text = getShortTimeSpan(item.lastSuccessfullyUpdatedMillis ?: item.timestamp)
         }
-
         holder.binding.btnHistorySave.setOnClickListener { onSave(item) }
         holder.binding.btnHistoryCopy.setOnClickListener { onCopy(item) }
         holder.binding.btnHistoryShare.setOnClickListener { onShare(item) }
         holder.binding.btnHistoryDelete.setOnClickListener { onDelete(item) }
+        holder.binding.btnHistoryDial.setOnClickListener { onDial(item) }
+        holder.binding.btnHistoryFavorite.text = if (item.favorite) "★ Favorite" else "☆ Favorite"
+        holder.binding.btnHistoryFavorite.setOnClickListener { onFavorite(item) }
+        holder.binding.btnHistoryEdit.setOnClickListener { onEdit(item) }
     }
 
     private fun getShortTimeSpan(time: Long): String {
-        val now = System.currentTimeMillis()
-        val diff = now - time
-
+        val diff = (System.currentTimeMillis() - time).coerceAtLeast(0)
         return when {
             diff < 60000 -> "now"
             diff < 3600000 -> "${diff / 60000}m"
@@ -90,10 +71,8 @@ class HistoryAdapter(
 
     fun updateData(newItems: List<CallerInfoEntity>) {
         val diffResult = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
-            override fun getOldListSize(): Int = items.size
-
-            override fun getNewListSize(): Int = newItems.size
-
+            override fun getOldListSize() = items.size
+            override fun getNewListSize() = newItems.size
             override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
                 val oldNumber = items[oldItemPosition].number
                 val newNumber = newItems[newItemPosition].number
@@ -101,17 +80,12 @@ class HistoryAdapter(
                 val newLookupValue = normalizeNumber(newNumber)
                 return if (oldLookupValue.isNotEmpty() && newLookupValue.isNotEmpty()) {
                     oldLookupValue == newLookupValue
-                } else {
-                    oldNumber == newNumber
-                }
+                } else oldNumber == newNumber
             }
-
-            override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
-                return items[oldItemPosition] == newItems[newItemPosition]
-            }
+            override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int) =
+                items[oldItemPosition] == newItems[newItemPosition]
         })
         items = newItems
         diffResult.dispatchUpdatesTo(this)
     }
 }
-

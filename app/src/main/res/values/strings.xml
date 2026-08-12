@@ -153,4 +153,47 @@
     <string name="incoming_overlay_fallback_channel">Caller card fallback</string>
     <string name="incoming_overlay_fallback_channel_description">Private fallback when the caller card overlay cannot be displayed</string>
     <string name="caller_information_available">Caller information available</string>
+
+    <string name="disconnect_telegram">Disconnect Telegram</string>
+    <string name="disconnect_telegram_confirmation">Disconnecting will end this Telegram session for Caller Info and you will need to authenticate again.</string>
+    <string name="telegram_connected_disconnect_advanced">Telegram connected. Use Disconnect only when you intentionally want to sign out.</string>
+    <string name="logging_out_telegram">Disconnecting Telegram…</string>
+    <string name="logout_failed">Telegram disconnect failed. Try again.</string>
+    <string name="logged_out_reauth">Disconnected. Telegram authentication is required to reconnect.</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_telegram">Telegram</string>
+    <string name="status_full_screen_caller_card">Lock-screen caller card</string>
+    <string name="status_battery_optimization">Background battery access</string>
+    <string name="status_pending_lookups">Pending lookups</string>
+    <string name="status_last_remote_lookup">Last successful remote lookup</string>
+    <string name="history_search_hint">Search number, name, carrier or country</string>
+    <string name="favorites_filter">Favorites</string>
+    <string name="recent_filter">Recent</string>
+    <string name="no_history_matches">No history matches this search or filter</string>
+    <string name="btn_dial">Dial</string>
+    <string name="refresh_caller">Refresh</string>
+    <string name="favorite">Favorite</string>
+    <string name="edit_alias_note">Alias &amp; note</string>
+    <string name="alias_hint">Preferred alias</string>
+    <string name="note_hint">Private note</string>
+    <string name="save_metadata">Save</string>
+    <string name="header_cache_privacy">Cache &amp; privacy</string>
+    <string name="label_cache_freshness">Caller information freshness</string>
+    <string name="cache_7_days">7 days</string>
+    <string name="cache_30_days">30 days</string>
+    <string name="cache_90_days">90 days</string>
+    <string name="label_caller_card_size">Caller card size</string>
+    <string name="card_compact">Compact</string>
+    <string name="card_expanded">Expanded</string>
+    <string name="label_caller_card_position">Caller card position</string>
+    <string name="card_upper">Upper</string>
+    <string name="card_center">Center</string>
+    <string name="card_lower">Lower</string>
+    <string name="export_caller_data">Export caller data</string>
+    <string name="import_caller_data">Import caller data</string>
+    <string name="export_privacy_warning">The exported file contains caller information and your aliases/notes. It never contains Telegram credentials, sessions, encryption keys, OTPs or 2FA data.</string>
+    <string name="import_complete">Imported %1$d records; skipped %2$d</string>
+    <string name="import_invalid">The selected caller-data file is invalid or unsupported</string>
+
 </resources>

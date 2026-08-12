@@ -48,8 +48,7 @@ class CallerOverlayService : Service() {
     private var pendingVerificationState = NumberVerificationState.UNAVAILABLE
     private var pendingLookupSource: CallerLookupSource? = null
     private val presentationState = OverlayPresentationState()
-    private var telephonyManager: TelephonyManager? = null
-    private var phoneStateListener: android.telephony.PhoneStateListener? = null
+    private var callEndMonitor: CallStateEndMonitor? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -92,9 +91,11 @@ class CallerOverlayService : Service() {
         val country = intent.getStringExtra("country")
         val location = intent.getStringExtra("location")
         val email = intent.getStringExtra("email")
+        val userNote = intent.getStringExtra("user_note")
         val error = intent.getStringExtra("error")
         val incomingCallStartMillis =
             intent.getLongExtra("incoming_call_start", System.currentTimeMillis())
+        val phoneAccountLabel = intent.getStringExtra("phone_account_label")
         val verificationState = intent.getStringExtra("verification_state")
             .toEnumOrNull<NumberVerificationState>()
             ?: NumberVerificationState.UNAVAILABLE
@@ -132,7 +133,9 @@ class CallerOverlayService : Service() {
             country = country,
             location = location,
             email = email,
+            userNote = userNote,
             error = error,
+            phoneAccountLabel = phoneAccountLabel,
             lookupStage = lookupStage,
             isPreview = false
         )
@@ -156,7 +159,9 @@ class CallerOverlayService : Service() {
         country: String?,
         location: String?,
         email: String? = null,
+        userNote: String? = null,
         error: String? = null,
+        phoneAccountLabel: String? = null,
         lookupStage: IncomingLookupStage,
         isPreview: Boolean
     ): Boolean {
@@ -185,10 +190,12 @@ class CallerOverlayService : Service() {
             val screenWidth = displayMetrics.widthPixels
             val screenHeight = displayMetrics.heightPixels
             val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val displayPrefs = Test15Preferences.getInstance(applicationContext)
+            val cardSize = displayPrefs.callerCardSize()
+            val cardPosition = displayPrefs.callerCardPosition()
             
-            // Calculate width with a max limit for landscape/tablets
-            val maxWidthPx = (420 * displayMetrics.density).toInt()
-            val preferredWidth = (screenWidth * 0.95).toInt()
+            val maxWidthPx = ((if (cardSize == CallerCardSize.COMPACT) 360 else 420) * displayMetrics.density).toInt()
+            val preferredWidth = (screenWidth * if (cardSize == CallerCardSize.COMPACT) 0.88 else 0.95).toInt()
             val finalWidth = if (preferredWidth > maxWidthPx) maxWidthPx else preferredWidth
 
             params = WindowManager.LayoutParams(
@@ -205,8 +212,15 @@ class CallerOverlayService : Service() {
             )
             
             params?.gravity = Gravity.CENTER
-            // Use percentage of screen height for Y offset
-            params?.y = if (isLandscape) (screenHeight * 0.15f).toInt() else -(screenHeight * 0.15f).toInt()
+            params?.y = when (cardPosition) {
+                CallerCardPosition.UPPER -> -(screenHeight * if (isLandscape) 0.15f else 0.30f).toInt()
+                CallerCardPosition.CENTER -> if (isLandscape) {
+                    (screenHeight * 0.15f).toInt()
+                } else {
+                    -(screenHeight * 0.15f).toInt()
+                }
+                CallerCardPosition.LOWER -> (screenHeight * if (isLandscape) 0.18f else 0.25f).toInt()
+            }
 
             candidateView.let { view ->
                 val hasCallerInformation = hasDisplayableCallerInformation(
@@ -266,9 +280,27 @@ class CallerOverlayService : Service() {
                     carrierRow.visibility = View.GONE
                 }
                 
+                val rowPhoneAccount = view.findViewById<LinearLayout>(R.id.rowPhoneAccount)
+                val tvPhoneAccount = view.findViewById<TextView>(R.id.tvPhoneAccount)
+                if (!phoneAccountLabel.isNullOrBlank()) {
+                    tvPhoneAccount.text = phoneAccountLabel
+                    rowPhoneAccount.visibility = View.VISIBLE
+                } else {
+                    rowPhoneAccount.visibility = View.GONE
+                }
+
+                val rowUserNote = view.findViewById<LinearLayout>(R.id.rowUserNote)
+                val tvUserNote = view.findViewById<TextView>(R.id.tvUserNote)
+                if (!userNote.isNullOrBlank() && cardSize == CallerCardSize.EXPANDED) {
+                    tvUserNote.text = userNote
+                    rowUserNote.visibility = View.VISIBLE
+                } else {
+                    rowUserNote.visibility = View.GONE
+                }
+
                 val rowEmail = view.findViewById<LinearLayout>(R.id.rowEmail)
                 val tvEmail = view.findViewById<TextView>(R.id.tvEmail)
-                if (!email.isNullOrEmpty()) {
+                if (!email.isNullOrEmpty() && cardSize == CallerCardSize.EXPANDED) {
                     tvEmail.text = email
                     rowEmail.visibility = View.VISIBLE
                 } else {
@@ -277,7 +309,7 @@ class CallerOverlayService : Service() {
 
                 val rowLocation = view.findViewById<LinearLayout>(R.id.rowLocation)
                 val tvLocation = view.findViewById<TextView>(R.id.tvLocation)
-                if (!location.isNullOrEmpty()) {
+                if (!location.isNullOrEmpty() && cardSize == CallerCardSize.EXPANDED) {
                     tvLocation.text = location
                     rowLocation.visibility = View.VISIBLE
                 } else {
@@ -293,6 +325,10 @@ class CallerOverlayService : Service() {
                     email = email,
                     location = location
                 )
+
+                view.findViewById<View>(R.id.btnOverlayDial).setOnClickListener {
+                    runCatching { startActivity(buildDialIntent(number).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
 
                 view.findViewById<View>(R.id.btnOverlaySave).setOnClickListener {
                     val insertIntent = Intent(ContactsContract.Intents.Insert.ACTION).apply {
@@ -440,7 +476,9 @@ class CallerOverlayService : Service() {
             country = null,
             location = null,
             email = null,
+            userNote = null,
             error = null,
+            phoneAccountLabel = null,
             lookupStage = IncomingLookupStage.RESOLVED,
             isPreview = true
         )
@@ -479,12 +517,21 @@ class CallerOverlayService : Service() {
             val screenHeight = displayMetrics.heightPixels
             val isLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
             
-            val maxWidthPx = (420 * displayMetrics.density).toInt()
-            val preferredWidth = (screenWidth * 0.95).toInt()
-            
+            val displayPrefs = Test15Preferences.getInstance(applicationContext)
+            val cardSize = displayPrefs.callerCardSize()
+            val cardPosition = displayPrefs.callerCardPosition()
+            val maxWidthPx = ((if (cardSize == CallerCardSize.COMPACT) 360 else 420) * displayMetrics.density).toInt()
+            val preferredWidth = (screenWidth * if (cardSize == CallerCardSize.COMPACT) 0.88 else 0.95).toInt()
             params?.width = if (preferredWidth > maxWidthPx) maxWidthPx else preferredWidth
-            // Update Y offset using percentage on configuration change
-            params?.y = if (isLandscape) (screenHeight * 0.15f).toInt() else -(screenHeight * 0.15f).toInt()
+            params?.y = when (cardPosition) {
+                CallerCardPosition.UPPER -> -(screenHeight * if (isLandscape) 0.15f else 0.30f).toInt()
+                CallerCardPosition.CENTER -> if (isLandscape) {
+                    (screenHeight * 0.15f).toInt()
+                } else {
+                    -(screenHeight * 0.15f).toInt()
+                }
+                CallerCardPosition.LOWER -> (screenHeight * if (isLandscape) 0.18f else 0.25f).toInt()
+            }
 
             try {
                 windowManager?.updateViewLayout(view, params)
@@ -532,47 +579,22 @@ class CallerOverlayService : Service() {
         stopSelf()
     }
 
-    @Suppress("DEPRECATION")
     private fun monitorCallEnd(context: Context) {
-        if (phoneStateListener != null) return
-        val manager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-            ?: return
-        val listener = object : android.telephony.PhoneStateListener() {
-            private var observedActiveCall = false
-
-            override fun onCallStateChanged(state: Int, phoneNumber: String?) {
-                if (state != TelephonyManager.CALL_STATE_IDLE) {
-                    observedActiveCall = true
-                    return
-                }
-                if (!observedActiveCall) return
-                val generation = activeCallGeneration ?: return
+        if (callEndMonitor != null) return
+        callEndMonitor = CallStateEndMonitor(context) {
+            val generation = activeCallGeneration
+            if (generation != null) {
                 removeOverlay()
                 activeIncomingCallGeneration.invalidate(generation)
             }
-        }
-        try {
-            manager.listen(listener, android.telephony.PhoneStateListener.LISTEN_CALL_STATE)
-            telephonyManager = manager
-            phoneStateListener = listener
-        } catch (_: SecurityException) {
-            // The next screening generation or user dismissal still clears the presentation.
+        }.also { monitor ->
+            if (!monitor.start()) callEndMonitor = null
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun stopMonitoringCallEnd() {
-        val listener = phoneStateListener
-        if (listener != null) {
-            runCatching {
-                telephonyManager?.listen(
-                    listener,
-                    android.telephony.PhoneStateListener.LISTEN_NONE
-                )
-            }
-        }
-        phoneStateListener = null
-        telephonyManager = null
+        callEndMonitor?.stop()
+        callEndMonitor = null
     }
 
     private fun loadRecentCall(

@@ -48,12 +48,18 @@ class CallerScreeningService : CallScreeningService() {
                 NumberVerificationState.UNAVAILABLE
             }
 
+            val phoneAccountLabel = runCatching {
+                val telecom = getSystemService(TelecomManager::class.java)
+                callDetails.accountHandle?.let(telecom::getPhoneAccount)?.label?.toString()
+            }.getOrNull()?.takeIf(String::isNotBlank)
+
             IncomingCallSnapshot(
                 isIncoming = isIncoming,
                 presentation = callDetails.handlePresentation,
                 scheme = callDetails.handle?.scheme,
                 value = callDetails.handle?.schemeSpecificPart,
                 verificationState = verificationState,
+                phoneAccountLabel = phoneAccountLabel,
                 cutoffMillis = System.currentTimeMillis()
             )
         } catch (_: Exception) {
@@ -95,6 +101,7 @@ class CallerScreeningService : CallScreeningService() {
                 normalizedNumber = normalizedNumber,
                 incomingCallStartMillis = snapshot.cutoffMillis,
                 verificationState = snapshot.verificationState,
+                phoneAccountLabel = snapshot.phoneAccountLabel,
                 generation = generation,
                 isCurrent = activeIncomingCallGeneration::isCurrent
             )
@@ -129,5 +136,6 @@ private data class IncomingCallSnapshot(
     val scheme: String?,
     val value: String?,
     val verificationState: NumberVerificationState,
+    val phoneAccountLabel: String?,
     val cutoffMillis: Long
 )

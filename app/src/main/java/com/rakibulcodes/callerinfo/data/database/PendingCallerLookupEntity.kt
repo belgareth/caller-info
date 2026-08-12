@@ -1,11 +1,17 @@
 package com.rakibulcodes.callerinfo.data.database
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
-
-@Entity(tableName = "pending_caller_lookup")
+/** In-memory representation; persisted through SecurePendingCallerLookupEntity. */
 data class PendingCallerLookupEntity(
-    @PrimaryKey val normalizedNumber: String,
+    val normalizedNumber: String,
+    val createdTimestampMillis: Long,
+    val nextEligibleRetryTimestampMillis: Long,
+    val attemptCount: Int
+)
+
+@androidx.room.Entity(tableName = "secure_pending_caller_lookup")
+data class SecurePendingCallerLookupEntity(
+    @androidx.room.PrimaryKey val lookupKey: String,
+    val encryptedNumber: String,
     val createdTimestampMillis: Long,
     val nextEligibleRetryTimestampMillis: Long,
     val attemptCount: Int

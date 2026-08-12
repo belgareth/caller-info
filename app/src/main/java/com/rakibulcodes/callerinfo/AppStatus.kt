@@ -6,7 +6,12 @@ enum class AppStatusType {
     PHONE,
     CONTACTS,
     CALL_HISTORY,
-    NOTIFICATIONS
+    NOTIFICATIONS,
+    TELEGRAM,
+    FULL_SCREEN_CALLER_CARD,
+    BATTERY_OPTIMIZATION,
+    PENDING_LOOKUPS,
+    LAST_REMOTE_LOOKUP
 }
 
 enum class AppStatusValue {
@@ -15,7 +20,10 @@ enum class AppStatusValue {
     NOT_ALLOWED,
     NOT_SELECTED,
     OPTIONAL,
-    UNAVAILABLE
+    UNAVAILABLE,
+    CONNECTED,
+    DISCONNECTED,
+    INFO
 }
 
 enum class AppStatusAction {
@@ -29,7 +37,8 @@ data class AppStatusItem(
     val type: AppStatusType,
     val value: AppStatusValue,
     val action: AppStatusAction,
-    val optional: Boolean = false
+    val optional: Boolean = false,
+    val detail: String? = null
 )
 
 data class AppStatusSnapshot(
@@ -41,7 +50,13 @@ data class AppStatusSnapshot(
     val callHistoryAllowed: Boolean,
     val callHistoryEnabled: Boolean,
     val notificationsRelevant: Boolean,
-    val notificationsAllowed: Boolean
+    val notificationsAllowed: Boolean,
+    val telegramReady: Boolean = false,
+    val fullScreenRelevant: Boolean = false,
+    val fullScreenAllowed: Boolean = true,
+    val batteryOptimizationIgnored: Boolean = false,
+    val pendingLookupCount: Int = 0,
+    val lastRemoteLookupText: String? = null
 )
 
 fun buildAppStatusItems(snapshot: AppStatusSnapshot): List<AppStatusItem> {
@@ -53,29 +68,22 @@ fun buildAppStatusItems(snapshot: AppStatusSnapshot): List<AppStatusItem> {
                 snapshot.callerScreeningActive -> AppStatusValue.ACTIVE
                 else -> AppStatusValue.NOT_SELECTED
             },
-            action = if (
-                snapshot.callerScreeningAvailable && !snapshot.callerScreeningActive
-            ) {
+            action = if (snapshot.callerScreeningAvailable && !snapshot.callerScreeningActive) {
                 AppStatusAction.SELECT
-            } else {
-                AppStatusAction.NONE
-            }
+            } else AppStatusAction.NONE
         ),
         AppStatusItem(
             type = AppStatusType.OVERLAY,
-            value = if (snapshot.overlayAllowed) {
-                AppStatusValue.ALLOWED
-            } else {
-                AppStatusValue.NOT_ALLOWED
-            },
-            action = if (snapshot.overlayAllowed) {
-                AppStatusAction.NONE
-            } else {
-                AppStatusAction.OPEN_SETTINGS
-            }
+            value = if (snapshot.overlayAllowed) AppStatusValue.ALLOWED else AppStatusValue.NOT_ALLOWED,
+            action = if (snapshot.overlayAllowed) AppStatusAction.NONE else AppStatusAction.OPEN_SETTINGS
         ),
         permissionStatus(AppStatusType.PHONE, snapshot.phoneAllowed),
-        permissionStatus(AppStatusType.CONTACTS, snapshot.contactsAllowed),
+        AppStatusItem(
+            type = AppStatusType.CONTACTS,
+            value = if (snapshot.contactsAllowed) AppStatusValue.ALLOWED else AppStatusValue.OPTIONAL,
+            action = if (snapshot.contactsAllowed) AppStatusAction.NONE else AppStatusAction.ALLOW,
+            optional = true
+        ),
         AppStatusItem(
             type = AppStatusType.CALL_HISTORY,
             value = when {
@@ -83,19 +91,44 @@ fun buildAppStatusItems(snapshot: AppStatusSnapshot): List<AppStatusItem> {
                 snapshot.callHistoryEnabled -> AppStatusValue.NOT_ALLOWED
                 else -> AppStatusValue.OPTIONAL
             },
-            action = if (
-                snapshot.callHistoryEnabled && !snapshot.callHistoryAllowed
-            ) {
+            action = if (snapshot.callHistoryEnabled && !snapshot.callHistoryAllowed) {
                 AppStatusAction.ALLOW
-            } else {
-                AppStatusAction.NONE
-            },
+            } else AppStatusAction.NONE,
             optional = true
+        ),
+        AppStatusItem(
+            type = AppStatusType.TELEGRAM,
+            value = if (snapshot.telegramReady) AppStatusValue.CONNECTED else AppStatusValue.DISCONNECTED,
+            action = AppStatusAction.NONE
+        ),
+        AppStatusItem(
+            type = AppStatusType.BATTERY_OPTIMIZATION,
+            value = if (snapshot.batteryOptimizationIgnored) AppStatusValue.ALLOWED else AppStatusValue.NOT_ALLOWED,
+            action = if (snapshot.batteryOptimizationIgnored) AppStatusAction.NONE else AppStatusAction.OPEN_SETTINGS
+        ),
+        AppStatusItem(
+            type = AppStatusType.PENDING_LOOKUPS,
+            value = AppStatusValue.INFO,
+            action = AppStatusAction.NONE,
+            detail = snapshot.pendingLookupCount.toString()
+        ),
+        AppStatusItem(
+            type = AppStatusType.LAST_REMOTE_LOOKUP,
+            value = AppStatusValue.INFO,
+            action = AppStatusAction.NONE,
+            detail = snapshot.lastRemoteLookupText ?: "Never"
         )
     )
 
     if (snapshot.notificationsRelevant) {
         items += permissionStatus(AppStatusType.NOTIFICATIONS, snapshot.notificationsAllowed)
+    }
+    if (snapshot.fullScreenRelevant) {
+        items += AppStatusItem(
+            type = AppStatusType.FULL_SCREEN_CALLER_CARD,
+            value = if (snapshot.fullScreenAllowed) AppStatusValue.ALLOWED else AppStatusValue.NOT_ALLOWED,
+            action = if (snapshot.fullScreenAllowed) AppStatusAction.NONE else AppStatusAction.OPEN_SETTINGS
+        )
     }
     return items
 }

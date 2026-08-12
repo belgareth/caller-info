@@ -8,26 +8,26 @@ import androidx.room.Transaction
 
 @Dao
 interface CallerInfoDao {
-    @Query("SELECT * FROM caller_info WHERE number = :number")
-    suspend fun getCallerInfo(number: String): CallerInfoEntity?
+    @Query("SELECT * FROM secure_caller_info WHERE lookupKey = :lookupKey")
+    suspend fun getCallerInfo(lookupKey: String): SecureCallerInfoEntity?
 
-    @Query("SELECT * FROM caller_info ORDER BY timestamp DESC")
-    suspend fun getAllCallerInfo(): List<CallerInfoEntity>
+    @Query("SELECT * FROM secure_caller_info ORDER BY timestamp DESC")
+    suspend fun getAllCallerInfo(): List<SecureCallerInfoEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertCallerInfo(callerInfo: CallerInfoEntity): Long
+    suspend fun insertCallerInfo(callerInfo: SecureCallerInfoEntity): Long
 
-    @Query("DELETE FROM caller_info")
+    @Query("DELETE FROM secure_caller_info")
     suspend fun clearAll(): Int
 
-    @Query("DELETE FROM caller_info WHERE number NOT IN (SELECT number FROM caller_info ORDER BY timestamp DESC LIMIT :limit)")
+    @Query("DELETE FROM secure_caller_info WHERE lookupKey NOT IN (SELECT lookupKey FROM secure_caller_info ORDER BY timestamp DESC LIMIT :limit)")
     suspend fun deleteOldEntries(limit: Int): Int
 
-    @Query("DELETE FROM caller_info WHERE number = :number")
-    suspend fun deleteByNumber(number: String)
+    @Query("DELETE FROM secure_caller_info WHERE lookupKey = :lookupKey")
+    suspend fun deleteByNumber(lookupKey: String)
 
     @Transaction
-    suspend fun insertAndTrim(callerInfo: CallerInfoEntity, limit: Int): Int {
+    suspend fun insertAndTrim(callerInfo: SecureCallerInfoEntity, limit: Int): Int {
         insertCallerInfo(callerInfo)
         return deleteOldEntries(limit)
     }

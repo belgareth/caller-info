@@ -115,6 +115,20 @@
         tools:text="Sample detail"
         tools:visibility="visible" />
 
+    <TextView
+        android:id="@+id/tvUserNote"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:drawablePadding="6dp"
+        android:gravity="center_vertical"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:visibility="gone"
+        app:drawableStartCompat="@drawable/ic_info"
+        tools:text="Private note"
+        tools:visibility="visible" />
+
     <!-- Error message (optional) -->
     <TextView
         android:id="@+id/tvError"

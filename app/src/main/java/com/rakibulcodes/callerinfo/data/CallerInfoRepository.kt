@@ -5,17 +5,22 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.room.withTransaction
 import com.rakibulcodes.callerinfo.CallerCachePolicy
+import com.rakibulcodes.callerinfo.Test15Preferences
+import com.rakibulcodes.callerinfo.callerCacheIsFresh
 import com.rakibulcodes.callerinfo.CallerLookupResult
 import com.rakibulcodes.callerinfo.CallerLookupSource
 import com.rakibulcodes.callerinfo.NumberFormattingPreferences
 import com.rakibulcodes.callerinfo.OfflineLookupScheduler
 import com.rakibulcodes.callerinfo.data.database.AppDatabase
+import com.rakibulcodes.callerinfo.data.database.SecureCallerInfoEntity
 import com.rakibulcodes.callerinfo.data.database.CallerInfoEntity
 import com.rakibulcodes.callerinfo.data.database.PendingCallerLookupEntity
 import com.rakibulcodes.callerinfo.hasUsefulCallerInformation
 import com.rakibulcodes.callerinfo.normalizePhoneNumber
 import com.rakibulcodes.callerinfo.shouldScheduleDeferredRetry
 import java.io.IOException
+import com.google.gson.Gson
+import com.google.gson.JsonSyntaxException
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +38,10 @@ class CallerInfoRepository(private val context: Context) {
     private val db = AppDatabase.getDatabase(context)
     private val telegramManager = TelegramManager.getInstance(context)
     private val numberFormattingPreferences = NumberFormattingPreferences.getInstance(context)
+    private val test15Preferences = Test15Preferences.getInstance(context)
+    private val cacheCodec: CallerCacheCodec = AndroidCallerCacheCodec()
+    private val legacyMigrationMutex = Mutex()
+    @Volatile private var secureCacheReady = false
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val singleFlight = SameKeySingleFlight<String, RemoteLookupOutcome>(refreshScope)
     private val storageMutex = Mutex()
@@ -46,7 +55,8 @@ class CallerInfoRepository(private val context: Context) {
         rawNumber: String,
         onLocalResult: suspend (CallerLookupResult) -> Unit = {},
         requestStillValid: () -> Boolean = { true },
-        retainDeferredRetryAfterRequestEnds: Boolean = false
+        retainDeferredRetryAfterRequestEnds: Boolean = false,
+        forceRemoteRefresh: Boolean = false
     ): CallerLookupResult {
         val number = sanitizeNumber(rawNumber)
         if (number.isEmpty()) {
@@ -61,7 +71,14 @@ class CallerInfoRepository(private val context: Context) {
 
         if (local != null) {
             val localResult = CallerLookupResult(local, CallerLookupSource.LOCAL)
-            if (CallerCachePolicy.isFresh(local.lastSuccessfullyUpdatedMillis, now())) {
+            if (
+                !forceRemoteRefresh &&
+                callerCacheIsFresh(
+                    local.lastSuccessfullyUpdatedMillis,
+                    now(),
+                    test15Preferences.cacheFreshness().millis
+                )
+            ) {
                 return localResult
             }
 
@@ -78,7 +95,10 @@ class CallerInfoRepository(private val context: Context) {
                     val saveResult = persistUseful(number, remote.callerInfo, lookupEpoch)
                     if (saveResult == SaveCallerResult.Saved) removePending(number)
                     if (requestStillValid()) {
-                        CallerLookupResult(remote.callerInfo, CallerLookupSource.REMOTE)
+                        CallerLookupResult(
+                            safelyReadLocal(number) ?: remote.callerInfo,
+                            CallerLookupSource.REMOTE
+                        )
                     } else {
                         localResult
                     }
@@ -130,7 +150,7 @@ class CallerInfoRepository(private val context: Context) {
                             )
                         )
                     } else {
-                        remote.callerInfo
+                        safelyReadLocal(number) ?: remote.callerInfo
                     }
                     CallerLookupResult(
                         displayed,
@@ -164,20 +184,27 @@ class CallerInfoRepository(private val context: Context) {
         }
     }
 
-    suspend fun getAllHistory(): List<CallerInfoEntity> =
-        db.callerInfoDao().getAllCallerInfo()
+    suspend fun getAllHistory(): List<CallerInfoEntity> {
+        ensureSecureCacheReady()
+        return db.callerInfoDao().getAllCallerInfo().mapNotNull { encrypted ->
+            runCatching { cacheCodec.decode(encrypted) }.getOrNull()
+        }
+    }
 
     suspend fun clearHistory() {
+        ensureSecureCacheReady()
         db.callerInfoDao().clearAll()
     }
 
     suspend fun clearSavedCallerInformation(): Boolean =
         try {
+            ensureSecureCacheReady()
             storageMutex.withLock {
                 db.withTransaction {
                     db.callerInfoDao().clearAll()
                     db.pendingCallerLookupDao().clearAll()
                 }
+                purgeDeletedPlaintextPages()
                 cacheEpoch.incrementAndGet()
             }
             true
@@ -189,6 +216,7 @@ class CallerInfoRepository(private val context: Context) {
 
     suspend fun pendingLookupCount(): Int =
         try {
+            ensureSecureCacheReady()
             db.pendingCallerLookupDao().count()
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -198,6 +226,7 @@ class CallerInfoRepository(private val context: Context) {
 
     suspend fun clearPendingLookups(): Boolean =
         try {
+            ensureSecureCacheReady()
             storageMutex.withLock {
                 db.pendingCallerLookupDao().clearAll()
                 pendingQueueEpoch.incrementAndGet()
@@ -220,14 +249,171 @@ class CallerInfoRepository(private val context: Context) {
     suspend fun deleteHistoryItem(number: String) {
         val normalizedNumber = sanitizeNumber(number)
         if (normalizedNumber.isNotEmpty()) {
-            db.callerInfoDao().deleteByNumber(normalizedNumber)
+            ensureSecureCacheReady()
+            db.callerInfoDao().deleteByNumber(cacheCodec.lookupKey(normalizedNumber))
         }
     }
 
     fun sanitizeNumber(input: String?): String =
         normalizePhoneNumber(input, numberFormattingPreferences.getConfig())
 
+    suspend fun refreshCallerInfo(
+        rawNumber: String,
+        requestStillValid: () -> Boolean = { true }
+    ): CallerLookupResult = getCallerInfoWithSource(
+        rawNumber = rawNumber,
+        requestStillValid = requestStillValid,
+        retainDeferredRetryAfterRequestEnds = true,
+        forceRemoteRefresh = true
+    )
+
+    suspend fun updateUserMetadata(
+        rawNumber: String,
+        alias: String?,
+        note: String?,
+        favorite: Boolean? = null
+    ): Boolean {
+        val number = sanitizeNumber(rawNumber)
+        if (number.isBlank()) return false
+        val existing = safelyReadLocal(number) ?: return false
+        val updated = existing.copy(
+            userAlias = alias?.trim()?.takeIf(String::isNotBlank),
+            userNote = note?.trim()?.takeIf(String::isNotBlank),
+            favorite = favorite ?: existing.favorite
+        )
+        return runCatching { writeSavedCaller(updated); true }.getOrDefault(false)
+    }
+
+    suspend fun setFavorite(rawNumber: String, favorite: Boolean): Boolean {
+        val number = sanitizeNumber(rawNumber)
+        val existing = safelyReadLocal(number) ?: return false
+        return updateUserMetadata(number, existing.userAlias, existing.userNote, favorite)
+    }
+
+    fun lastSuccessfulRemoteLookupMillis(): Long? =
+        context.getSharedPreferences("Settings", Context.MODE_PRIVATE)
+            .getLong(KEY_LAST_SUCCESSFUL_REMOTE_LOOKUP, 0L)
+            .takeIf { it > 0L }
+
+    suspend fun exportCallerData(): String {
+        val entries = getAllHistory()
+        return Gson().toJson(CallerExportEnvelope(version = 1, entries = entries))
+    }
+
+    suspend fun importCallerData(json: String): ImportSummary {
+        if (json.length > MAX_IMPORT_JSON_CHARS) return ImportSummary(0, 0, true)
+        val envelope = try { Gson().fromJson(json, CallerExportEnvelope::class.java) }
+        catch (_: JsonSyntaxException) { return ImportSummary(0, 0, true) }
+        catch (_: Exception) { return ImportSummary(0, 0, true) }
+        if (envelope.version != 1 || envelope.entries == null || envelope.entries.size > MAX_IMPORT_ENTRIES) {
+            return ImportSummary(0, 0, true)
+        }
+        var imported = 0
+        var skipped = 0
+        for (incoming in envelope.entries) {
+            val normalized = sanitizeNumber(incoming.number)
+            if (normalized.isBlank()) { skipped++; continue }
+            val existing = safelyReadLocal(normalized)
+            val preferred = if (existing != null && existing.timestamp > incoming.timestamp) existing else incoming
+            val merged = preferred.copy(
+                number = normalized,
+                userAlias = existing?.userAlias ?: incoming.userAlias,
+                userNote = existing?.userNote ?: incoming.userNote,
+                favorite = (existing?.favorite == true) || incoming.favorite,
+                timestamp = maxOf(existing?.timestamp ?: 0L, incoming.timestamp),
+                lastSuccessfullyUpdatedMillis = listOfNotNull(
+                    existing?.lastSuccessfullyUpdatedMillis, incoming.lastSuccessfullyUpdatedMillis
+                ).maxOrNull()
+            )
+            if (!hasUsefulCallerInformation(merged) && merged.userAlias.isNullOrBlank() && merged.userNote.isNullOrBlank()) {
+                skipped++; continue
+            }
+            runCatching { writeSavedCaller(merged) }.onSuccess { imported++ }.onFailure { skipped++ }
+        }
+        return ImportSummary(imported, skipped, false)
+    }
+
+    private suspend fun ensureSecureCacheReady() {
+        if (secureCacheReady) return
+        legacyMigrationMutex.withLock {
+            if (secureCacheReady) return
+            withContext(Dispatchers.IO) {
+                val sqlite = db.openHelper.writableDatabase
+                val exists = sqlite.query(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='caller_info'"
+                ).use { it.moveToFirst() }
+                var removedPlaintextTables = false
+                if (exists) {
+                    val legacy = mutableListOf<CallerInfoEntity>()
+                    sqlite.query(
+                        "SELECT number,country,name,carrier,email,location,address1,address2,error,timestamp,lastSuccessfullyUpdatedMillis FROM caller_info"
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            legacy += CallerInfoEntity(
+                                number = cursor.getString(0),
+                                country = cursor.getString(1),
+                                name = cursor.getString(2),
+                                carrier = cursor.getString(3),
+                                email = cursor.getString(4),
+                                location = cursor.getString(5),
+                                address1 = cursor.getString(6),
+                                address2 = cursor.getString(7),
+                                error = cursor.getString(8),
+                                timestamp = cursor.getLong(9),
+                                lastSuccessfullyUpdatedMillis = if (cursor.isNull(10)) null else cursor.getLong(10)
+                            )
+                        }
+                    }
+                    for (record in legacy) {
+                        if (record.number.isNotBlank()) {
+                            db.callerInfoDao().insertCallerInfo(cacheCodec.encode(record))
+                        }
+                    }
+                    sqlite.execSQL("DROP TABLE IF EXISTS caller_info")
+                    removedPlaintextTables = true
+                }
+                val pendingExists = sqlite.query(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_caller_lookup'"
+                ).use { it.moveToFirst() }
+                if (pendingExists) {
+                    val legacyPending = mutableListOf<PendingCallerLookupEntity>()
+                    sqlite.query(
+                        "SELECT normalizedNumber,createdTimestampMillis,nextEligibleRetryTimestampMillis,attemptCount FROM pending_caller_lookup"
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            legacyPending += PendingCallerLookupEntity(
+                                normalizedNumber = cursor.getString(0),
+                                createdTimestampMillis = cursor.getLong(1),
+                                nextEligibleRetryTimestampMillis = cursor.getLong(2),
+                                attemptCount = cursor.getInt(3)
+                            )
+                        }
+                    }
+                    for (item in legacyPending) {
+                        if (item.normalizedNumber.isNotBlank()) {
+                            db.pendingCallerLookupDao().insertIfAbsent(cacheCodec.encodePending(item))
+                        }
+                    }
+                    sqlite.execSQL("DROP TABLE IF EXISTS pending_caller_lookup")
+                    removedPlaintextTables = true
+                }
+                if (removedPlaintextTables) {
+                    purgeDeletedPlaintextPages()
+                }
+                secureCacheReady = true
+            }
+        }
+    }
+
+    private fun purgeDeletedPlaintextPages() {
+        val sqlite = db.openHelper.writableDatabase
+        sqlite.query("PRAGMA wal_checkpoint(TRUNCATE)").use { }
+        sqlite.execSQL("VACUUM")
+        sqlite.query("PRAGMA wal_checkpoint(TRUNCATE)").use { }
+    }
+
     suspend fun processPendingLookups(): PendingLookupRunResult = withContext(Dispatchers.IO) {
+        ensureSecureCacheReady()
         val currentTime = now()
         val pendingDao = db.pendingCallerLookupDao()
         pendingDao.deleteExpiredOrExhausted(
@@ -246,7 +432,7 @@ class CallerInfoRepository(private val context: Context) {
         val eligible = pendingDao.eligible(
             currentTime,
             CallerCachePolicy.MAXIMUM_ITEMS_PER_RUN
-        )
+        ).mapNotNull { encrypted -> runCatching { cacheCodec.decodePending(encrypted) }.getOrNull() }
         var processed = 0
         var hadTransientFailure = false
 
@@ -254,7 +440,7 @@ class CallerInfoRepository(private val context: Context) {
             currentCoroutineContext().ensureActive()
             val canonicalNumber = sanitizeNumber(item.normalizedNumber)
             if (canonicalNumber.isEmpty() || canonicalNumber != item.normalizedNumber) {
-                pendingDao.delete(item.normalizedNumber)
+                pendingDao.delete(cacheCodec.lookupKey(item.normalizedNumber))
                 continue
             }
 
@@ -287,7 +473,7 @@ class CallerInfoRepository(private val context: Context) {
                 is RemoteLookupOutcome.Failure -> {
                     val policy = retryPolicyFor(outcome.reason)
                     if (policy == null) {
-                        pendingDao.delete(canonicalNumber)
+                        pendingDao.delete(cacheCodec.lookupKey(canonicalNumber))
                     } else {
                         if (
                             policy.incrementAttempt ||
@@ -333,7 +519,7 @@ class CallerInfoRepository(private val context: Context) {
     ) {
         val attemptCount = item.attemptCount + if (policy.incrementAttempt) 1 else 0
         if (attemptCount >= CallerCachePolicy.MAXIMUM_ATTEMPTS) {
-            db.pendingCallerLookupDao().delete(item.normalizedNumber)
+            db.pendingCallerLookupDao().delete(cacheCodec.lookupKey(item.normalizedNumber))
         } else {
             val nextEligible = if (policy.incrementAttempt) {
                 CallerCachePolicy.nextEligibleRetryMillis(currentTime, attemptCount)
@@ -341,7 +527,7 @@ class CallerInfoRepository(private val context: Context) {
                 currentTime + policy.delayMillis
             }
             db.pendingCallerLookupDao().updateAttempt(
-                item.normalizedNumber,
+                cacheCodec.lookupKey(item.normalizedNumber),
                 attemptCount,
                 nextEligible
             )
@@ -350,7 +536,9 @@ class CallerInfoRepository(private val context: Context) {
 
     private suspend fun safelyReadLocal(number: String): CallerInfoEntity? =
         try {
-            db.callerInfoDao().getCallerInfo(number)
+            ensureSecureCacheReady()
+            db.callerInfoDao().getCallerInfo(cacheCodec.lookupKey(number))
+                ?.let(cacheCodec::decode)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -373,11 +561,15 @@ class CallerInfoRepository(private val context: Context) {
             return SaveCallerResult.Failed
         }
         val savedAt = now()
+        val existing = safelyReadLocal(number)
         val saved = callerInfo.copy(
             number = number,
             error = null,
             timestamp = savedAt,
-            lastSuccessfullyUpdatedMillis = savedAt
+            lastSuccessfullyUpdatedMillis = savedAt,
+            userAlias = existing?.userAlias,
+            userNote = existing?.userNote,
+            favorite = existing?.favorite ?: false
         )
 
         return storageMutex.withLock {
@@ -387,26 +579,34 @@ class CallerInfoRepository(private val context: Context) {
             ) {
                 if (removePendingAfterSave) {
                     db.withTransaction {
-                        writeSavedCaller(saved)
-                        db.pendingCallerLookupDao().delete(number)
+                        writeSavedCaller(saved, markRemoteSuccess = true)
+                        db.pendingCallerLookupDao().delete(cacheCodec.lookupKey(number))
                     }
                 } else {
-                    writeSavedCaller(saved)
+                    writeSavedCaller(saved, markRemoteSuccess = true)
                 }
             }
         }
     }
 
-    private suspend fun writeSavedCaller(saved: CallerInfoEntity) {
+    private suspend fun writeSavedCaller(saved: CallerInfoEntity, markRemoteSuccess: Boolean = false) {
+        ensureSecureCacheReady()
+        val encrypted = cacheCodec.encode(saved)
         val prefs = context.getSharedPreferences("Settings", Context.MODE_PRIVATE)
         val limitValue = prefs.getString("max_history_size", "1000")
         if (limitValue == "Unlimited") {
-            db.callerInfoDao().insertCallerInfo(saved)
+            db.callerInfoDao().insertCallerInfo(encrypted)
         } else {
             db.callerInfoDao().insertAndTrim(
-                saved,
+                encrypted,
                 limitValue?.toIntOrNull() ?: 1000
             )
+        }
+        if (markRemoteSuccess) {
+            prefs.edit().putLong(
+                KEY_LAST_SUCCESSFUL_REMOTE_LOOKUP,
+                saved.lastSuccessfullyUpdatedMillis ?: saved.timestamp
+            ).apply()
         }
     }
 
@@ -421,11 +621,13 @@ class CallerInfoRepository(private val context: Context) {
             if (pendingQueueEpoch.get() != expectedPendingQueueEpoch) return false
             val currentTime = now()
             db.pendingCallerLookupDao().insertBounded(
-                PendingCallerLookupEntity(
-                    normalizedNumber = number,
-                    createdTimestampMillis = currentTime,
-                    nextEligibleRetryTimestampMillis = currentTime + policy.delayMillis,
-                    attemptCount = 0
+                cacheCodec.encodePending(
+                    PendingCallerLookupEntity(
+                        normalizedNumber = number,
+                        createdTimestampMillis = currentTime,
+                        nextEligibleRetryTimestampMillis = currentTime + policy.delayMillis,
+                        attemptCount = 0
+                    )
                 ),
                 CallerCachePolicy.MAXIMUM_PENDING_LOOKUPS
             )
@@ -441,7 +643,7 @@ class CallerInfoRepository(private val context: Context) {
 
     private suspend fun removePending(number: String) {
         try {
-            db.pendingCallerLookupDao().delete(number)
+            db.pendingCallerLookupDao().delete(cacheCodec.lookupKey(number))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -610,9 +812,9 @@ class CallerInfoRepository(private val context: Context) {
             null
         }
         is TdApi.UpdateNewMessage -> update.message.takeIf { message ->
-                message.chatId == chatId &&
-                    !message.isOutgoing &&
-                    message.id > sentMessageId
+            message.chatId == chatId &&
+                !message.isOutgoing &&
+                message.id > sentMessageId
         }
         is TdApi.UpdateMessageContent -> {
             if (update.chatId != chatId || update.messageId <= sentMessageId) {
@@ -712,6 +914,9 @@ class CallerInfoRepository(private val context: Context) {
     private fun now(): Long = System.currentTimeMillis()
 
     companion object {
+        private const val KEY_LAST_SUCCESSFUL_REMOTE_LOOKUP = "last_successful_remote_lookup"
+        private const val MAX_IMPORT_JSON_CHARS = 5_000_000
+        private const val MAX_IMPORT_ENTRIES = 20_000
         private val LATE_RESPONSE_QUARANTINE = LateResponseQuarantine(
             nowMillis = System::currentTimeMillis
         )
@@ -726,6 +931,13 @@ class CallerInfoRepository(private val context: Context) {
             }
     }
 }
+
+data class CallerExportEnvelope(
+    val version: Int = 1,
+    val entries: List<CallerInfoEntity>? = emptyList()
+)
+
+data class ImportSummary(val imported: Int, val skipped: Int, val invalidFile: Boolean)
 
 private sealed interface RemoteLookupOutcome {
     data class Useful(val callerInfo: CallerInfoEntity) : RemoteLookupOutcome

@@ -155,8 +155,7 @@ object LockedCallerCardController {
     private const val NOTIFICATION_ID = 8102
     private var activeGeneration: Long? = null
     private var activeNumber: String? = null
-    private var telephonyManager: TelephonyManager? = null
-    private var phoneStateListener: android.telephony.PhoneStateListener? = null
+    private var callEndMonitor: CallStateEndMonitor? = null
 
     @Synchronized
     fun isActive(generation: Long): Boolean = activeGeneration == generation
@@ -257,55 +256,26 @@ object LockedCallerCardController {
     fun isDeviceLocked(context: Context): Boolean =
         context.getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true
 
-    @Suppress("DEPRECATION")
     private fun monitorCallEnd(context: Context) {
-        synchronized(this) {
-            if (phoneStateListener != null) return
-        }
-        val manager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-            ?: return
-        val listener = object : android.telephony.PhoneStateListener() {
-            private var observedActiveCall = false
-
-            override fun onCallStateChanged(state: Int, phoneNumber: String?) {
-                if (state != TelephonyManager.CALL_STATE_IDLE) {
-                    observedActiveCall = true
-                    return
-                }
-                if (!observedActiveCall) return
-                val current = synchronized(this@LockedCallerCardController) {
-                    activeGeneration
-                } ?: return
+        synchronized(this) { if (callEndMonitor != null) return }
+        val monitor = CallStateEndMonitor(context) {
+            val current = synchronized(this@LockedCallerCardController) { activeGeneration }
+            if (current != null) {
                 clear(context, current)
                 activeIncomingCallGeneration.invalidate(current)
             }
         }
-        try {
-            manager.listen(listener, android.telephony.PhoneStateListener.LISTEN_CALL_STATE)
-            synchronized(this) {
-                telephonyManager = manager
-                phoneStateListener = listener
-            }
-        } catch (_: SecurityException) {
-            // The next screening generation still clears the presentation safely.
+        if (monitor.start()) {
+            synchronized(this) { callEndMonitor = monitor }
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun stopMonitoringCallEnd() {
-        val (manager, listener) = synchronized(this) {
-            val current = telephonyManager to phoneStateListener
-            phoneStateListener = null
-            telephonyManager = null
+        val monitor = synchronized(this) {
+            val current = callEndMonitor
+            callEndMonitor = null
             current
         }
-        if (listener != null) {
-            runCatching {
-                manager?.listen(
-                    listener,
-                    android.telephony.PhoneStateListener.LISTEN_NONE
-                )
-            }
-        }
+        monitor?.stop()
     }
 }

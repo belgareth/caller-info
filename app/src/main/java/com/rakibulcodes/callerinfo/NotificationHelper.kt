@@ -100,10 +100,20 @@ object NotificationHelper {
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
 
         if (result != null) {
-            val displayName = result.name?.takeIf { it.isNotBlank() } ?: "Unknown"
+            val displayName = result.displayName()?.takeIf { it.isNotBlank() } ?: "Unknown"
             val shareText = buildShareText(result, message)
 
             builder
+                .addAction(
+                    R.drawable.ic_phone,
+                    "Dial",
+                    PendingIntent.getActivity(
+                        context,
+                        notificationId,
+                        buildDialIntent(result.number),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
                 .addAction(
                     R.drawable.ic_save_contact,
                     "Save",
@@ -200,12 +210,12 @@ object NotificationHelper {
     }
 
     fun buildShareText(info: CallerInfoEntity, message: String = buildNotificationMessage(info)): String {
-        return "Name: ${info.name ?: "Unknown"}\nNumber: ${info.number}\n\n$message"
+        return "Name: ${info.displayName() ?: "Unknown"}\nNumber: ${info.number}\n\n$message"
     }
 
     fun buildNotificationMessage(info: CallerInfoEntity): String {
         val sb = StringBuilder()
-        sb.append(info.name ?: "Unknown")
+        sb.append(info.displayName() ?: "Unknown")
 
         val carrierInfo = listOfNotNull(info.carrier, info.country).joinToString(", ")
         if (carrierInfo.isNotEmpty()) {

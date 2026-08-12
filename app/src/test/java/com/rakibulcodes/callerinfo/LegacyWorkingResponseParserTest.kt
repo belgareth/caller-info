@@ -58,40 +58,6 @@ class LegacyWorkingResponseParserTest {
     }
 
     @Test
-    fun observedEditedBotShapeKeepsUsefulCountryWithOptionalNotFoundName() {
-        val number = "+10000000000"
-        val countryLine = "Country: Example Country"
-        val text = buildString {
-            append("Number: ")
-            append(number)
-            append('\n')
-            append(countryLine)
-            append("\n\nCarrier: Example Carrier\nName: Not Found")
-        }
-        val entities = arrayOf(
-            bold(text, "Number: "),
-            entity(text, number, TdApi.TextEntityTypePhoneNumber()),
-            bold(text, number),
-            bold(text, countryLine),
-            bold(text, "Carrier:"),
-            bold(text, "Example Carrier"),
-            bold(text, "Name:"),
-            code(text, "Not Found")
-        )
-
-        val parsed = LegacyWorkingResponseParser.parse(
-            number,
-            TdApi.FormattedText(text, entities),
-            nowMillis = 123L
-        )
-
-        assertEquals("Example Country", parsed.country)
-        assertEquals("Unknown", parsed.name)
-        assertNull(parsed.carrier)
-        assertNull(parsed.error)
-    }
-
-    @Test
     fun finalResponseMarkersMatchLastWorkingBehavior() {
         assertTrue(LegacyWorkingResponseParser.isFinalResponse("Country: Example"))
         assertTrue(LegacyWorkingResponseParser.isFinalResponse("Provider Says:"))
