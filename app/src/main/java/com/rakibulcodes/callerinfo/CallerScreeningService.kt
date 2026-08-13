@@ -95,6 +95,10 @@ class CallerScreeningService : CallScreeningService() {
             if (!activeIncomingCallGeneration.attachNumber(generation, normalizedNumber)) {
                 return@replace
             }
+            RecentCallRepository.getInstance(applicationContext).recordObservedIncomingCall(
+                normalizedNumber = normalizedNumber,
+                timestampMillis = snapshot.cutoffMillis
+            )
 
             IncomingCallProcessor.processCall(
                 context = applicationContext,

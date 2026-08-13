@@ -56,8 +56,6 @@ class Test15FeatureTest {
                 overlayAllowed = true,
                 phoneAllowed = true,
                 contactsAllowed = false,
-                callHistoryAllowed = false,
-                callHistoryEnabled = false,
                 notificationsRelevant = false,
                 notificationsAllowed = true
             )

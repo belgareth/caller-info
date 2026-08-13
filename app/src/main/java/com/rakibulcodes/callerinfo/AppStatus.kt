@@ -5,11 +5,12 @@ enum class AppStatusType {
     OVERLAY,
     PHONE,
     CONTACTS,
-    CALL_HISTORY,
+    PREVIOUS_CALL_CONTEXT,
     NOTIFICATIONS,
     TELEGRAM,
     FULL_SCREEN_CALLER_CARD,
     BATTERY_OPTIMIZATION,
+    BACKGROUND_RESTRICTION,
     PENDING_LOOKUPS,
     LAST_REMOTE_LOOKUP
 }
@@ -21,6 +22,10 @@ enum class AppStatusValue {
     NOT_SELECTED,
     OPTIONAL,
     UNAVAILABLE,
+    DEFAULT,
+    EXEMPT,
+    RESTRICTED,
+    NOT_RESTRICTED,
     CONNECTED,
     DISCONNECTED,
     INFO
@@ -47,14 +52,14 @@ data class AppStatusSnapshot(
     val overlayAllowed: Boolean,
     val phoneAllowed: Boolean,
     val contactsAllowed: Boolean,
-    val callHistoryAllowed: Boolean,
-    val callHistoryEnabled: Boolean,
+    val previousCallContextEnabled: Boolean = false,
     val notificationsRelevant: Boolean,
     val notificationsAllowed: Boolean,
     val telegramReady: Boolean = false,
     val fullScreenRelevant: Boolean = false,
     val fullScreenAllowed: Boolean = true,
-    val batteryOptimizationIgnored: Boolean = false,
+    val batteryOptimizationStatus: BatteryOptimizationStatus = BatteryOptimizationStatus.UNAVAILABLE,
+    val backgroundRestrictionStatus: BackgroundRestrictionStatus = BackgroundRestrictionStatus.UNAVAILABLE,
     val pendingLookupCount: Int = 0,
     val lastRemoteLookupText: String? = null
 )
@@ -85,16 +90,11 @@ fun buildAppStatusItems(snapshot: AppStatusSnapshot): List<AppStatusItem> {
             optional = true
         ),
         AppStatusItem(
-            type = AppStatusType.CALL_HISTORY,
-            value = when {
-                snapshot.callHistoryAllowed -> AppStatusValue.ALLOWED
-                snapshot.callHistoryEnabled -> AppStatusValue.NOT_ALLOWED
-                else -> AppStatusValue.OPTIONAL
-            },
-            action = if (snapshot.callHistoryEnabled && !snapshot.callHistoryAllowed) {
-                AppStatusAction.ALLOW
-            } else AppStatusAction.NONE,
-            optional = true
+            type = AppStatusType.PREVIOUS_CALL_CONTEXT,
+            value = if (snapshot.previousCallContextEnabled) AppStatusValue.ACTIVE else AppStatusValue.OPTIONAL,
+            action = AppStatusAction.NONE,
+            optional = true,
+            detail = if (snapshot.previousCallContextEnabled) "App-observed calls" else null
         ),
         AppStatusItem(
             type = AppStatusType.TELEGRAM,
@@ -103,8 +103,23 @@ fun buildAppStatusItems(snapshot: AppStatusSnapshot): List<AppStatusItem> {
         ),
         AppStatusItem(
             type = AppStatusType.BATTERY_OPTIMIZATION,
-            value = if (snapshot.batteryOptimizationIgnored) AppStatusValue.ALLOWED else AppStatusValue.NOT_ALLOWED,
-            action = if (snapshot.batteryOptimizationIgnored) AppStatusAction.NONE else AppStatusAction.OPEN_SETTINGS
+            value = when (snapshot.batteryOptimizationStatus) {
+                BatteryOptimizationStatus.DEFAULT -> AppStatusValue.DEFAULT
+                BatteryOptimizationStatus.EXEMPT -> AppStatusValue.EXEMPT
+                BatteryOptimizationStatus.UNAVAILABLE -> AppStatusValue.UNAVAILABLE
+            },
+            action = AppStatusAction.OPEN_SETTINGS,
+            optional = true
+        ),
+        AppStatusItem(
+            type = AppStatusType.BACKGROUND_RESTRICTION,
+            value = when (snapshot.backgroundRestrictionStatus) {
+                BackgroundRestrictionStatus.NOT_RESTRICTED -> AppStatusValue.NOT_RESTRICTED
+                BackgroundRestrictionStatus.RESTRICTED -> AppStatusValue.RESTRICTED
+                BackgroundRestrictionStatus.UNAVAILABLE -> AppStatusValue.UNAVAILABLE
+            },
+            action = AppStatusAction.OPEN_SETTINGS,
+            optional = true
         ),
         AppStatusItem(
             type = AppStatusType.PENDING_LOOKUPS,

@@ -49,7 +49,7 @@
     <string name="hint_code">Login Code</string>
     <string name="hint_password">Password (2FA)</string>
     <string name="btn_login_telegram">Login to Telegram</string>
-    <string name="msg_battery_opt">To ensure the caller ID overlay works correctly in the background, please disable battery optimization for this app. Tap here to open settings.</string>
+    <string name="msg_battery_opt">Caller Info should normally work with Android\'s default battery settings. If caller identification is delayed or unavailable after the phone has been idle, review battery/background settings.</string>
     <string name="label_setup_instructions">Follow these steps to connect with Telegram:\n1. Get API ID and Hash from https://my.telegram.org\n2. Enter your phone number below\n3. Login with your code &amp; password</string>
     <string name="error_empty_field">Cannot be empty</string>
     <string name="error_max_history_range">Must be between 100 and 10000</string>
@@ -71,7 +71,7 @@
     <string name="error_international_length">The complete international number must not exceed 15 digits</string>
     <string name="header_recent_call">Recent call</string>
     <string name="label_show_previous_call">Show previous call</string>
-    <string name="desc_show_previous_call">Show the most recent matching call type and time</string>
+    <string name="desc_show_previous_call">Show the most recent matching call observed by Caller Info</string>
     <string name="recent_call_incoming">Incoming call</string>
     <string name="recent_call_outgoing">Outgoing call</string>
     <string name="recent_call_missed">Missed call</string>
@@ -80,15 +80,12 @@
     <string name="recent_call_voicemail">Voicemail</string>
     <string name="recent_call_answered_elsewhere">Answered on another device</string>
     <string name="recent_call_yesterday">Yesterday</string>
-    <string name="recent_call_permission_title">Call history permission</string>
-    <string name="recent_call_permission_message">Allow call history access to show the previous call indicator.</string>
-    <string name="recent_call_permission_settings">App settings</string>
     <string name="header_app_status">App status</string>
     <string name="status_caller_screening">Caller screening role</string>
     <string name="status_overlay">Display over other apps</string>
     <string name="status_phone">Phone permission</string>
     <string name="status_contacts">Contacts permission</string>
-    <string name="status_call_history">Call history permission</string>
+    <string name="status_previous_call_context">Previous call context</string>
     <string name="status_notifications">Notification permission</string>
     <string name="status_active">Active</string>
     <string name="status_allowed">Allowed</string>
@@ -96,6 +93,10 @@
     <string name="status_not_selected">Not selected</string>
     <string name="status_optional">Optional</string>
     <string name="status_unavailable">Unavailable</string>
+    <string name="status_default">Default</string>
+    <string name="status_exempt">Exempt</string>
+    <string name="status_restricted">Restricted</string>
+    <string name="status_not_restricted">Not restricted</string>
     <string name="status_optional_suffix">%1$s · Optional</string>
     <string name="status_action_select">Select</string>
     <string name="status_action_allow">Allow</string>
@@ -165,6 +166,9 @@
     <string name="status_telegram">Telegram</string>
     <string name="status_full_screen_caller_card">Lock-screen caller card</string>
     <string name="status_battery_optimization">Background battery access</string>
+    <string name="status_background_restriction">Background restriction</string>
+    <string name="battery_background_settings">Battery &amp; background settings</string>
+    <string name="battery_background_guidance">Caller Info should normally work with Android\'s default battery settings. If caller identification is delayed or unavailable after the phone has been idle, review this app\'s battery/background settings. Choose unrestricted or exempt only if needed.</string>
     <string name="status_pending_lookups">Pending lookups</string>
     <string name="status_last_remote_lookup">Last successful remote lookup</string>
     <string name="history_search_hint">Search number, name, carrier or country</string>

@@ -53,7 +53,7 @@ class DiagnosticsTest {
         val items = statuses(
             overlayAllowed = false,
             contactsAllowed = false,
-            callHistoryAllowed = false
+            previousCallContextEnabled = false
         )
 
         assertEquals(
@@ -66,8 +66,79 @@ class DiagnosticsTest {
         )
         assertEquals(
             AppStatusValue.OPTIONAL,
-            items.first { it.type == AppStatusType.CALL_HISTORY }.value
+            items.first { it.type == AppStatusType.PREVIOUS_CALL_CONTEXT }.value
         )
+    }
+
+    @Test
+    fun previousCallContextUsesAppOwnedStateNotPermissionAction() {
+        val item = statuses(previousCallContextEnabled = true)
+            .first { it.type == AppStatusType.PREVIOUS_CALL_CONTEXT }
+
+        assertEquals(AppStatusValue.ACTIVE, item.value)
+        assertEquals(AppStatusAction.NONE, item.action)
+        assertTrue(item.optional)
+    }
+
+    @Test
+    fun batteryAndBackgroundStatesAreDiagnosticNotScaryFailures() {
+        val items = statuses(
+            batteryOptimizationStatus = BatteryOptimizationStatus.DEFAULT,
+            backgroundRestrictionStatus = BackgroundRestrictionStatus.NOT_RESTRICTED
+        )
+
+        assertEquals(
+            AppStatusValue.DEFAULT,
+            items.first { it.type == AppStatusType.BATTERY_OPTIMIZATION }.value
+        )
+        assertEquals(
+            AppStatusAction.OPEN_SETTINGS,
+            items.first { it.type == AppStatusType.BATTERY_OPTIMIZATION }.action
+        )
+        assertEquals(
+            AppStatusValue.NOT_RESTRICTED,
+            items.first { it.type == AppStatusType.BACKGROUND_RESTRICTION }.value
+        )
+    }
+
+    @Test
+    fun backgroundRestrictionReportsRestrictedWhenAndroidDoes() {
+        assertEquals(
+            BackgroundRestrictionStatus.RESTRICTED,
+            backgroundRestrictionStatus(sdkInt = android.os.Build.VERSION_CODES.P, backgroundRestricted = true)
+        )
+        assertEquals(
+            BackgroundRestrictionStatus.NOT_RESTRICTED,
+            backgroundRestrictionStatus(sdkInt = android.os.Build.VERSION_CODES.P, backgroundRestricted = false)
+        )
+        assertEquals(
+            BackgroundRestrictionStatus.UNAVAILABLE,
+            backgroundRestrictionStatus(sdkInt = android.os.Build.VERSION_CODES.O, backgroundRestricted = false)
+        )
+    }
+
+    @Test
+    fun batteryOptimizationReportsDefaultExemptOrUnavailable() {
+        assertEquals(
+            BatteryOptimizationStatus.DEFAULT,
+            batteryOptimizationStatus(sdkInt = android.os.Build.VERSION_CODES.M, ignoringBatteryOptimizations = false)
+        )
+        assertEquals(
+            BatteryOptimizationStatus.EXEMPT,
+            batteryOptimizationStatus(sdkInt = android.os.Build.VERSION_CODES.M, ignoringBatteryOptimizations = true)
+        )
+        assertEquals(
+            BatteryOptimizationStatus.UNAVAILABLE,
+            batteryOptimizationStatus(sdkInt = android.os.Build.VERSION_CODES.LOLLIPOP, ignoringBatteryOptimizations = false)
+        )
+    }
+
+    @Test
+    fun batteryBackgroundSettingsUsesStandardSettingsIntents() {
+        val actions = batteryBackgroundSettingsActions(android.os.Build.VERSION_CODES.TIRAMISU)
+
+        assertTrue(actions.contains(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS))
+        assertTrue(actions.contains(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
     }
 
     @Test
@@ -139,8 +210,10 @@ class DiagnosticsTest {
         callerScreeningActive: Boolean = true,
         overlayAllowed: Boolean = true,
         contactsAllowed: Boolean = true,
-        callHistoryAllowed: Boolean = true,
-        notificationsRelevant: Boolean = true
+        previousCallContextEnabled: Boolean = false,
+        notificationsRelevant: Boolean = true,
+        batteryOptimizationStatus: BatteryOptimizationStatus = BatteryOptimizationStatus.EXEMPT,
+        backgroundRestrictionStatus: BackgroundRestrictionStatus = BackgroundRestrictionStatus.NOT_RESTRICTED
     ): List<AppStatusItem> = buildAppStatusItems(
         AppStatusSnapshot(
             callerScreeningAvailable = true,
@@ -148,10 +221,11 @@ class DiagnosticsTest {
             overlayAllowed = overlayAllowed,
             phoneAllowed = true,
             contactsAllowed = contactsAllowed,
-            callHistoryAllowed = callHistoryAllowed,
-            callHistoryEnabled = false,
+            previousCallContextEnabled = previousCallContextEnabled,
             notificationsRelevant = notificationsRelevant,
-            notificationsAllowed = true
+            notificationsAllowed = true,
+            batteryOptimizationStatus = batteryOptimizationStatus,
+            backgroundRestrictionStatus = backgroundRestrictionStatus
         )
     )
 }

@@ -251,7 +251,7 @@ class RecentCallInteractionTest {
             null
         }
 
-        val result = RecentCallFinder(source, { true }, { false })
+        val result = RecentCallFinder(source, { false })
             .findPreviousCall("0712345678", 1_000, config)
 
         assertNull(result)
@@ -263,7 +263,7 @@ class RecentCallInteractionTest {
         val source = RecentCallRecordSource { _, _ -> throw IllegalStateException() }
 
         assertNull(
-            RecentCallFinder(source, { true }, { true })
+            RecentCallFinder(source, { true })
                 .findPreviousCall("0712345678", 1_000, config)
         )
     }
@@ -273,7 +273,7 @@ class RecentCallInteractionTest {
         val source = RecentCallRecordSource { _, _ -> throw SecurityException() }
 
         assertNull(
-            RecentCallFinder(source, { true }, { true })
+            RecentCallFinder(source, { true })
                 .findPreviousCall("0712345678", 1_000, config)
         )
     }
@@ -286,7 +286,7 @@ class RecentCallInteractionTest {
             null
         }
 
-        val result = RecentCallFinder(source, { false }, { true })
+        val result = RecentCallFinder(source, { false })
             .findPreviousCall("0712345678", 1_000, config)
 
         assertNull(result)
@@ -303,6 +303,24 @@ class RecentCallInteractionTest {
                 sameOverlayView = true
             )
         )
+    }
+
+    @Test
+    fun appOwnedObservedStoreReturnsPreviousCallWithoutAndroidCallLogPermission() {
+        val store = InMemoryObservedRecentCallStore()
+        store.record(record("+123712345678", RecentCallType.INCOMING, 800))
+        var queryCount = 0
+
+        val source = RecentCallRecordSource { cutoff, predicate ->
+            queryCount++
+            store.findFirstBefore(cutoff, predicate)
+        }
+
+        val result = RecentCallFinder(source, { true })
+            .findPreviousCall("0712345678", 1_000, config)
+
+        assertEquals(1, queryCount)
+        assertEquals(RecentCallInteraction(RecentCallType.INCOMING, 800), result)
     }
 
     @Test
@@ -366,8 +384,7 @@ class RecentCallInteractionTest {
             recordSource = RecentCallRecordSource { _, predicate ->
                 records.firstOrNull(predicate)
             },
-            featureEnabled = { true },
-            permissionGranted = { true }
+            featureEnabled = { true }
         )
 
     private fun record(

@@ -1,6 +1,7 @@
 package com.rakibulcodes.callerinfo
 
 import android.app.role.RoleManager
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -82,15 +83,6 @@ class MainActivity : AppCompatActivity() {
         }
         refreshAppStatus()
     }
-
-    private val callLogPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            setRecentCallEnabled(granted)
-            if (!granted) {
-                showRecentCallPermissionGuidance()
-            }
-            refreshAppStatus()
-        }
 
     private val exportCallerDataLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -308,7 +300,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.tvBatteryInfo.setOnClickListener {
-            requestIgnoreBatteryOptimizations()
+            openBatteryBackgroundSettings()
         }
 
         checkPermissions()
@@ -624,15 +616,7 @@ class MainActivity : AppCompatActivity() {
         binding.switchAcceptWithoutPrefix.isChecked =
             numberFormattingPreferences.getAcceptWithoutPrefix()
         val recentCallPreferences = RecentCallPreferences.getInstance(this)
-        val recentCallPermissionGranted = ContextCompat.checkSelfPermission(
-            this,
-            android.Manifest.permission.READ_CALL_LOG
-        ) == PackageManager.PERMISSION_GRANTED
-        if (recentCallPreferences.isEnabled() && !recentCallPermissionGranted) {
-            recentCallPreferences.setEnabled(false)
-        }
-        binding.switchShowPreviousCall.isChecked =
-            recentCallPreferences.isEnabled() && recentCallPermissionGranted
+        binding.switchShowPreviousCall.isChecked = recentCallPreferences.isEnabled()
         val lookupSourcePreferences = LookupSourcePreferences.getInstance(this)
         binding.switchShowLookupSource.isChecked = lookupSourcePreferences.isEnabled()
         val test15Preferences = Test15Preferences.getInstance(this)
@@ -756,26 +740,8 @@ class MainActivity : AppCompatActivity() {
         }
         binding.switchShowPreviousCall.setOnCheckedChangeListener { _, isChecked ->
             if (updatingRecentCallSwitch) return@setOnCheckedChangeListener
-
-            if (!isChecked) {
-                recentCallPreferences.setEnabled(false)
-            } else if (
-                ContextCompat.checkSelfPermission(
-                    this,
-                    android.Manifest.permission.READ_CALL_LOG
-                ) == PackageManager.PERMISSION_GRANTED
-            ) {
-                recentCallPreferences.setEnabled(true)
-            } else {
-                setRecentCallEnabled(false)
-                if (recentCallPreferences.wasPermissionRequested()) {
-                    showRecentCallPermissionGuidance()
-                } else {
-                    recentCallPreferences.markPermissionRequested()
-                    callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
-                }
-                return@setOnCheckedChangeListener
-            }
+            recentCallPreferences.setEnabled(isChecked)
+            refreshAppStatus()
         }
         binding.switchShowLookupSource.setOnCheckedChangeListener { _, isChecked ->
             lookupSourcePreferences.setEnabled(isChecked)
@@ -1180,8 +1146,7 @@ class MainActivity : AppCompatActivity() {
             overlayAllowed = hasOverlayPermission(),
             phoneAllowed = isPermissionAllowed(android.Manifest.permission.READ_PHONE_STATE),
             contactsAllowed = isPermissionAllowed(android.Manifest.permission.READ_CONTACTS),
-            callHistoryAllowed = isPermissionAllowed(android.Manifest.permission.READ_CALL_LOG),
-            callHistoryEnabled = RecentCallPreferences.getInstance(this).isEnabled(),
+            previousCallContextEnabled = RecentCallPreferences.getInstance(this).isEnabled(),
             notificationsRelevant = notificationsRelevant,
             notificationsAllowed =
                 !notificationsRelevant ||
@@ -1189,8 +1154,18 @@ class MainActivity : AppCompatActivity() {
             telegramReady = telegramManager.isReady(),
             fullScreenRelevant = fullScreenRelevant,
             fullScreenAllowed = fullScreenAllowed,
-            batteryOptimizationIgnored = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
-                powerManager?.isIgnoringBatteryOptimizations(packageName) == true,
+            batteryOptimizationStatus = batteryOptimizationStatus(
+                sdkInt = Build.VERSION.SDK_INT,
+                ignoringBatteryOptimizations = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    powerManager?.isIgnoringBatteryOptimizations(packageName)
+                } else null
+            ),
+            backgroundRestrictionStatus = backgroundRestrictionStatus(
+                sdkInt = Build.VERSION.SDK_INT,
+                backgroundRestricted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    getSystemService(ActivityManager::class.java)?.isBackgroundRestricted
+                } else null
+            ),
             pendingLookupCount = pendingLookupCountForStatus,
             lastRemoteLookupText = lastRemoteText
         )
@@ -1236,11 +1211,7 @@ class MainActivity : AppCompatActivity() {
                 requestPermissions(arrayOf(android.Manifest.permission.READ_PHONE_STATE), 101)
             AppStatusType.CONTACTS ->
                 requestPermissions(arrayOf(android.Manifest.permission.READ_CONTACTS), 101)
-            AppStatusType.CALL_HISTORY -> {
-                val preferences = RecentCallPreferences.getInstance(this)
-                preferences.markPermissionRequested()
-                callLogPermissionLauncher.launch(android.Manifest.permission.READ_CALL_LOG)
-            }
+            AppStatusType.PREVIOUS_CALL_CONTEXT -> Unit
             AppStatusType.NOTIFICATIONS -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     requestPermissions(
@@ -1262,7 +1233,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            AppStatusType.BATTERY_OPTIMIZATION -> requestIgnoreBatteryOptimizations()
+            AppStatusType.BATTERY_OPTIMIZATION,
+            AppStatusType.BACKGROUND_RESTRICTION -> openBatteryBackgroundSettings()
             AppStatusType.TELEGRAM,
             AppStatusType.PENDING_LOOKUPS,
             AppStatusType.LAST_REMOTE_LOOKUP -> Unit
@@ -1277,11 +1249,12 @@ class MainActivity : AppCompatActivity() {
         AppStatusType.OVERLAY -> R.string.status_overlay
         AppStatusType.PHONE -> R.string.status_phone
         AppStatusType.CONTACTS -> R.string.status_contacts
-        AppStatusType.CALL_HISTORY -> R.string.status_call_history
+        AppStatusType.PREVIOUS_CALL_CONTEXT -> R.string.status_previous_call_context
         AppStatusType.NOTIFICATIONS -> R.string.status_notifications
         AppStatusType.TELEGRAM -> R.string.status_telegram
         AppStatusType.FULL_SCREEN_CALLER_CARD -> R.string.status_full_screen_caller_card
         AppStatusType.BATTERY_OPTIMIZATION -> R.string.status_battery_optimization
+        AppStatusType.BACKGROUND_RESTRICTION -> R.string.status_background_restriction
         AppStatusType.PENDING_LOOKUPS -> R.string.status_pending_lookups
         AppStatusType.LAST_REMOTE_LOOKUP -> R.string.status_last_remote_lookup
     }
@@ -1296,6 +1269,10 @@ class MainActivity : AppCompatActivity() {
                 AppStatusValue.NOT_SELECTED -> R.string.status_not_selected
                 AppStatusValue.OPTIONAL -> R.string.status_optional
                 AppStatusValue.UNAVAILABLE -> R.string.status_unavailable
+                AppStatusValue.DEFAULT -> R.string.status_default
+                AppStatusValue.EXEMPT -> R.string.status_exempt
+                AppStatusValue.RESTRICTED -> R.string.status_restricted
+                AppStatusValue.NOT_RESTRICTED -> R.string.status_not_restricted
                 AppStatusValue.CONNECTED -> R.string.status_connected
                 AppStatusValue.DISCONNECTED -> R.string.status_disconnected
                 AppStatusValue.INFO -> R.string.status_unavailable
@@ -1435,20 +1412,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     
-    private fun requestIgnoreBatteryOptimizations() {
+    private fun openBatteryBackgroundSettings() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                .setTitle("Battery Optimization")
-                .setMessage("To ensure Caller ID works reliably in the background, please go to App Info -> Battery, and select 'Unrestricted'.")
-                .setPositiveButton("Open Settings") { _, _ ->
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
+                .setTitle(R.string.battery_background_settings)
+                .setMessage(R.string.battery_background_guidance)
+                .setPositiveButton(R.string.status_action_open_settings) { _, _ ->
+                    startActivity(firstResolvableBatteryBackgroundIntent())
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
         }
+    }
+
+    private fun firstResolvableBatteryBackgroundIntent(): Intent {
+        val intents = batteryBackgroundSettingsActions(Build.VERSION.SDK_INT).map { action ->
+            when (action) {
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS ->
+                    Intent(action).apply { data = Uri.parse("package:$packageName") }
+                else -> Intent(action)
+            }
+        }
+        return intents.firstOrNull { it.resolveActivity(packageManager) != null }
+            ?: Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            }
     }
 
     private fun copyToClipboard(text: String) {
@@ -1616,17 +1604,6 @@ class MainActivity : AppCompatActivity() {
             checkPermissions()
             val prefs = getSharedPreferences("Settings", MODE_PRIVATE)
             val isEnabled = prefs.getBoolean("enabled", false)
-            val recentCallPreferences = RecentCallPreferences.getInstance(this)
-            if (
-                recentCallPreferences.isEnabled() &&
-                ContextCompat.checkSelfPermission(
-                    this,
-                    android.Manifest.permission.READ_CALL_LOG
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                setRecentCallEnabled(false)
-            }
-            
             updateStatusIndicator(isEnabled)
             refreshAppStatus()
             refreshPendingLookupStatus()
@@ -1705,21 +1682,6 @@ class MainActivity : AppCompatActivity() {
             binding.switchShowPreviousCall.isChecked = enabled
             updatingRecentCallSwitch = false
         }
-    }
-
-    private fun showRecentCallPermissionGuidance() {
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.recent_call_permission_title)
-            .setMessage(R.string.recent_call_permission_message)
-            .setPositiveButton(R.string.recent_call_permission_settings) { _, _ ->
-                startActivity(
-                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                )
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private fun updateStatusIndicator(enabled: Boolean) {

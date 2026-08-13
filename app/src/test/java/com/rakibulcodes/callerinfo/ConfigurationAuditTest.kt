@@ -13,7 +13,7 @@ class ConfigurationAuditTest {
         assertTrue(manifest.contains("android:allowBackup=\"false\""))
         assertTrue(manifest.contains("android:fullBackupContent=\"@xml/backup_rules\""))
         assertTrue(manifest.contains("android:dataExtractionRules=\"@xml/data_extraction_rules\""))
-        assertTrue(manifest.contains("android.permission.READ_CALL_LOG"))
+        assertFalse(manifest.contains("android.permission.READ_CALL_LOG"))
         assertFalse(manifest.contains("android.permission.READ_SMS"))
     }
 
@@ -143,9 +143,12 @@ class ConfigurationAuditTest {
         val gradle = sourceFile("build.gradle.kts").readText()
 
         assertFalse(manifest.contains("READ_SMS"))
+        assertFalse(manifest.contains("RECEIVE_SMS"))
+        assertFalse(manifest.contains("CALL_PHONE"))
+        assertFalse(manifest.contains("MANAGE_EXTERNAL_STORAGE"))
         assertFalse(manifest.contains("Telephony.Sms"))
-        assertTrue(gradle.contains("versionCode = 17"))
-        assertTrue(gradle.contains("versionName = \"1.1.0-test.15\""))
+        assertTrue(gradle.contains("versionCode = 18"))
+        assertTrue(gradle.contains("versionName = \"1.1.0-test.16\""))
     }
 
     @Test

@@ -61,15 +61,14 @@ fun interface RecentCallRecordSource {
 
 class RecentCallFinder(
     private val recordSource: RecentCallRecordSource,
-    private val featureEnabled: () -> Boolean,
-    private val permissionGranted: () -> Boolean
+    private val featureEnabled: () -> Boolean
 ) {
     fun findPreviousCall(
         incomingNumber: String?,
         cutoffMillis: Long,
         config: NumberNormalizationConfig
     ): RecentCallInteraction? {
-        if (!featureEnabled() || !permissionGranted()) return null
+        if (!featureEnabled()) return null
 
         val normalizedIncoming = normalizePhoneNumber(incomingNumber, config)
         if (normalizedIncoming.isBlank()) return null
