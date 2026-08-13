@@ -1413,30 +1413,50 @@ class MainActivity : AppCompatActivity() {
 
     
     private fun openBatteryBackgroundSettings() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.battery_background_settings)
-                .setMessage(R.string.battery_background_guidance)
-                .setPositiveButton(R.string.status_action_open_settings) { _, _ ->
-                    startActivity(firstResolvableBatteryBackgroundIntent())
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
+        val destinations = batteryBackgroundSettingsDestinations(Build.VERSION.SDK_INT)
+        val labels = destinations.map { destination ->
+            when (destination) {
+                BatteryBackgroundSettingsDestination.APP_DETAILS ->
+                    getString(R.string.battery_background_app_settings)
+                BatteryBackgroundSettingsDestination.BATTERY_OPTIMIZATION ->
+                    getString(R.string.battery_background_optimization_settings)
+            }
+        }.toTypedArray()
+
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.battery_background_settings)
+            .setMessage(R.string.battery_background_guidance)
+            .setItems(labels) { _, index ->
+                startActivity(intentForBatteryBackgroundDestination(destinations[index]))
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
-    private fun firstResolvableBatteryBackgroundIntent(): Intent {
-        val intents = batteryBackgroundSettingsActions(Build.VERSION.SDK_INT).map { action ->
-            when (action) {
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS ->
-                    Intent(action).apply { data = Uri.parse("package:$packageName") }
-                else -> Intent(action)
-            }
+    private fun intentForBatteryBackgroundDestination(
+        destination: BatteryBackgroundSettingsDestination
+    ): Intent {
+        val primary = when (destination) {
+            BatteryBackgroundSettingsDestination.APP_DETAILS ->
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            BatteryBackgroundSettingsDestination.BATTERY_OPTIMIZATION ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                } else {
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                }
         }
-        return intents.firstOrNull { it.resolveActivity(packageManager) != null }
-            ?: Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        return if (primary.resolveActivity(packageManager) != null) {
+            primary
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = Uri.parse("package:$packageName")
             }
+        }
     }
 
     private fun copyToClipboard(text: String) {

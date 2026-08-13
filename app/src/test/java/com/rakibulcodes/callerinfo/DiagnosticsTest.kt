@@ -134,11 +134,11 @@ class DiagnosticsTest {
     }
 
     @Test
-    fun batteryBackgroundSettingsUsesStandardSettingsIntents() {
-        val actions = batteryBackgroundSettingsActions(android.os.Build.VERSION_CODES.TIRAMISU)
+    fun batteryBackgroundSettingsOffersExplicitChoices() {
+        val actions = batteryBackgroundSettingsDestinations(android.os.Build.VERSION_CODES.TIRAMISU)
 
-        assertTrue(actions.contains(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS))
-        assertTrue(actions.contains(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        assertTrue(actions.contains(BatteryBackgroundSettingsDestination.APP_DETAILS))
+        assertTrue(actions.contains(BatteryBackgroundSettingsDestination.BATTERY_OPTIMIZATION))
     }
 
     @Test

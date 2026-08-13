@@ -141,14 +141,29 @@ class ConfigurationAuditTest {
     fun messageAccessAndLauncherChangesRemainAbsent() {
         val manifest = sourceFile("src/main/AndroidManifest.xml").readText()
         val gradle = sourceFile("build.gradle.kts").readText()
+        val recentCalls = sourceFile(
+            "src/main/java/com/rakibulcodes/callerinfo/RecentCallRepository.kt"
+        ).readText()
 
         assertFalse(manifest.contains("READ_SMS"))
         assertFalse(manifest.contains("RECEIVE_SMS"))
         assertFalse(manifest.contains("CALL_PHONE"))
         assertFalse(manifest.contains("MANAGE_EXTERNAL_STORAGE"))
         assertFalse(manifest.contains("Telephony.Sms"))
+        assertFalse(recentCalls.contains("android.provider.CallLog"))
+        assertFalse(recentCalls.contains("CallLog.Calls"))
         assertTrue(gradle.contains("versionCode = 18"))
         assertTrue(gradle.contains("versionName = \"1.1.0-test.16\""))
+    }
+
+    @Test
+    fun previousCallUiUsesTruthfulAppObservedSemantics() {
+        val strings = sourceFile("src/main/res/values/strings.xml").readText()
+
+        assertTrue(strings.contains("Previously seen calls"))
+        assertTrue(strings.contains("previously observed this number"))
+        assertTrue(strings.contains("Android Call Log access is not required"))
+        assertFalse(strings.contains("Allow call history access"))
     }
 
     @Test

@@ -1,7 +1,6 @@
 package com.rakibulcodes.callerinfo
 
 import android.os.Build
-import android.provider.Settings
 
 enum class BatteryOptimizationStatus {
     DEFAULT,
@@ -39,12 +38,17 @@ fun backgroundRestrictionStatus(
         BackgroundRestrictionStatus.NOT_RESTRICTED
     }
 
-fun batteryBackgroundSettingsActions(sdkInt: Int): List<String> =
+enum class BatteryBackgroundSettingsDestination {
+    APP_DETAILS,
+    BATTERY_OPTIMIZATION
+}
+
+fun batteryBackgroundSettingsDestinations(sdkInt: Int): List<BatteryBackgroundSettingsDestination> =
     if (sdkInt >= Build.VERSION_CODES.M) {
         listOf(
-            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+            BatteryBackgroundSettingsDestination.APP_DETAILS,
+            BatteryBackgroundSettingsDestination.BATTERY_OPTIMIZATION
         )
     } else {
-        listOf(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        listOf(BatteryBackgroundSettingsDestination.APP_DETAILS)
     }

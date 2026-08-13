@@ -324,6 +324,19 @@ class RecentCallInteractionTest {
     }
 
     @Test
+    fun appOwnedObservedIncomingCallsDoNotInventFinalDisposition() {
+        val store = InMemoryObservedRecentCallStore()
+        store.record(record("+123712345678", RecentCallType.INCOMING, 800))
+
+        val result = RecentCallFinder(
+            RecentCallRecordSource { cutoff, predicate -> store.findFirstBefore(cutoff, predicate) },
+            { true }
+        ).findPreviousCall("0712345678", 1_000, config)
+
+        assertEquals(RecentCallType.INCOMING, result?.type)
+    }
+
+    @Test
     fun dismissedPresentationRejectsResult() {
         assertEquals(
             false,
