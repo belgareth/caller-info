@@ -1413,24 +1413,32 @@ class MainActivity : AppCompatActivity() {
 
     
     private fun openBatteryBackgroundSettings() {
-        val destinations = batteryBackgroundSettingsDestinations(Build.VERSION.SDK_INT)
-        val labels = destinations.map { destination ->
-            when (destination) {
-                BatteryBackgroundSettingsDestination.APP_DETAILS ->
-                    getString(R.string.battery_background_app_settings)
-                BatteryBackgroundSettingsDestination.BATTERY_OPTIMIZATION ->
-                    getString(R.string.battery_background_optimization_settings)
-            }
-        }.toTypedArray()
-
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+        val builder = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(R.string.battery_background_settings)
             .setMessage(R.string.battery_background_guidance)
-            .setItems(labels) { _, index ->
-                startActivity(intentForBatteryBackgroundDestination(destinations[index]))
+            .setPositiveButton(R.string.battery_background_app_settings) { _, _ ->
+                startActivity(
+                    intentForBatteryBackgroundDestination(
+                        BatteryBackgroundSettingsDestination.APP_DETAILS
+                    )
+                )
             }
             .setNegativeButton("Cancel", null)
-            .show()
+
+        if (batteryBackgroundSettingsDestinations(Build.VERSION.SDK_INT).contains(
+                BatteryBackgroundSettingsDestination.BATTERY_OPTIMIZATION
+            )
+        ) {
+            builder.setNeutralButton(R.string.battery_background_optimization_settings) { _, _ ->
+                startActivity(
+                    intentForBatteryBackgroundDestination(
+                        BatteryBackgroundSettingsDestination.BATTERY_OPTIMIZATION
+                    )
+                )
+            }
+        }
+
+        builder.show()
     }
 
     private fun intentForBatteryBackgroundDestination(

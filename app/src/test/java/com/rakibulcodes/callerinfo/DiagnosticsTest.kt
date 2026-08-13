@@ -142,6 +142,19 @@ class DiagnosticsTest {
     }
 
     @Test
+    fun batteryBackgroundDialogUsesButtonsNotHiddenMessageAndItemsCombination() {
+        val activity = listOf(
+            java.io.File("src/main/java/com/rakibulcodes/callerinfo/MainActivity.kt"),
+            java.io.File("app/src/main/java/com/rakibulcodes/callerinfo/MainActivity.kt")
+        ).first { it.exists() }.readText()
+
+        assertTrue(activity.contains("setPositiveButton(R.string.battery_background_app_settings"))
+        assertTrue(activity.contains("setNeutralButton(R.string.battery_background_optimization_settings"))
+        assertFalse(activity.contains(".setItems(labels)"))
+        assertFalse(activity.contains("Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"))
+    }
+
+    @Test
     fun notificationStatusIsAbsentWhenNotRelevant() {
         assertTrue(statuses(notificationsRelevant = false).none {
             it.type == AppStatusType.NOTIFICATIONS
