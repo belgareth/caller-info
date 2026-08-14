@@ -119,6 +119,7 @@ object IncomingOverlayFallbackNotification {
                 context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
                 stopMonitoringCallEnd()
                 activeGeneration = null
+                LockedCallerCardController.onPresentationCleared(generation)
                 activeIncomingCallGeneration.invalidate(generation)
             }
         }

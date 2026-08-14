@@ -239,6 +239,9 @@ object IncomingCallProcessor {
                     generation = generation,
                     normalizedNumber = normalizedNumber,
                     name = callerInfo.displayName()?.takeIf { callerInfo.error == null },
+                    carrier = callerInfo.carrier,
+                    country = callerInfo.country,
+                    incomingCallStartMillis = incomingCallStartMillis,
                     verificationState = verificationState,
                     lookupStage = lookupStage,
                     error = callerInfo.error

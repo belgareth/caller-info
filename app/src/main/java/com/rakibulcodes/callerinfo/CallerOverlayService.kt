@@ -45,6 +45,7 @@ class CallerOverlayService : Service() {
     private var presentationId = 0L
     private var activeCallGeneration: Long? = null
     private var activeNormalizedNumber: String? = null
+    private var activeLockedPresentation = false
     private var pendingVerificationState = NumberVerificationState.UNAVAILABLE
     private var pendingLookupSource: CallerLookupSource? = null
     private val presentationState = OverlayPresentationState()
@@ -93,6 +94,7 @@ class CallerOverlayService : Service() {
         val email = intent.getStringExtra("email")
         val userNote = intent.getStringExtra("user_note")
         val error = intent.getStringExtra("error")
+        val isLockedPresentation = intent.getBooleanExtra("locked_presentation", false)
         val incomingCallStartMillis =
             intent.getLongExtra("incoming_call_start", System.currentTimeMillis())
         val phoneAccountLabel = intent.getStringExtra("phone_account_label")
@@ -123,8 +125,9 @@ class CallerOverlayService : Service() {
         }
         activeCallGeneration = callGeneration
         activeNormalizedNumber = number
+        activeLockedPresentation = isLockedPresentation
         pendingVerificationState = verificationState
-        pendingLookupSource = lookupSource
+        pendingLookupSource = if (isLockedPresentation) null else lookupSource
         presentationState.beginRealCall(callGeneration)
         val overlayShown = showOverlay(
             number = number,
@@ -137,7 +140,8 @@ class CallerOverlayService : Service() {
             error = error,
             phoneAccountLabel = phoneAccountLabel,
             lookupStage = lookupStage,
-            isPreview = false
+            isPreview = false,
+            isLockedPresentation = isLockedPresentation
         )
         if (overlayShown) {
             loadRecentCall(
@@ -163,7 +167,8 @@ class CallerOverlayService : Service() {
         error: String? = null,
         phoneAccountLabel: String? = null,
         lookupStage: IncomingLookupStage,
-        isPreview: Boolean
+        isPreview: Boolean,
+        isLockedPresentation: Boolean = false
     ): Boolean {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
@@ -191,8 +196,16 @@ class CallerOverlayService : Service() {
             val screenHeight = displayMetrics.heightPixels
             val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
             val displayPrefs = Test15Preferences.getInstance(applicationContext)
-            val cardSize = displayPrefs.callerCardSize()
-            val cardPosition = displayPrefs.callerCardPosition()
+            val cardSize = if (isLockedPresentation) {
+                CallerCardSize.COMPACT
+            } else {
+                displayPrefs.callerCardSize()
+            }
+            val cardPosition = if (isLockedPresentation) {
+                CallerCardPosition.UPPER
+            } else {
+                displayPrefs.callerCardPosition()
+            }
             
             val maxWidthPx = ((if (cardSize == CallerCardSize.COMPACT) 360 else 420) * displayMetrics.density).toInt()
             val preferredWidth = (screenWidth * if (cardSize == CallerCardSize.COMPACT) 0.88 else 0.95).toInt()
@@ -211,8 +224,14 @@ class CallerOverlayService : Service() {
                 PixelFormat.TRANSLUCENT
             )
             
-            params?.gravity = Gravity.CENTER
-            params?.y = when (cardPosition) {
+            params?.gravity = if (isLockedPresentation) {
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            } else {
+                Gravity.CENTER
+            }
+            params?.y = if (isLockedPresentation) {
+                (24 * displayMetrics.density).toInt()
+            } else when (cardPosition) {
                 CallerCardPosition.UPPER -> -(screenHeight * if (isLandscape) 0.15f else 0.30f).toInt()
                 CallerCardPosition.CENTER -> if (isLandscape) {
                     (screenHeight * 0.15f).toInt()
@@ -259,17 +278,23 @@ class CallerOverlayService : Service() {
                 statusView.text = statusText
                 statusView.visibility = if (statusText.isNullOrBlank()) View.GONE else View.VISIBLE
                 view.findViewById<View>(R.id.overlayActions).visibility =
-                    if (incomingActionsVisible(lookupStage, hasCallerInformation, isPreview)) {
+                    if (!isLockedPresentation &&
+                        incomingActionsVisible(lookupStage, hasCallerInformation, isPreview)
+                    ) {
                         View.VISIBLE
                     } else {
                         View.GONE
                     }
                 bindVerificationBadge(view, pendingVerificationState)
-                bindLookupSource(
-                    view = view,
-                    source = pendingLookupSource,
-                    hasCallerInformation = hasCallerInformation
-                )
+                if (isLockedPresentation) {
+                    view.findViewById<LinearLayout>(R.id.rowLookupSource).visibility = View.GONE
+                } else {
+                    bindLookupSource(
+                        view = view,
+                        source = pendingLookupSource,
+                        hasCallerInformation = hasCallerInformation
+                    )
+                }
 
                 val carrierText = listOfNotNull(carrier, country).joinToString(" · ")
                 val carrierRow = view.findViewById<LinearLayout>(R.id.rowCarrier)
@@ -282,7 +307,7 @@ class CallerOverlayService : Service() {
                 
                 val rowPhoneAccount = view.findViewById<LinearLayout>(R.id.rowPhoneAccount)
                 val tvPhoneAccount = view.findViewById<TextView>(R.id.tvPhoneAccount)
-                if (!phoneAccountLabel.isNullOrBlank()) {
+                if (!isLockedPresentation && !phoneAccountLabel.isNullOrBlank()) {
                     tvPhoneAccount.text = phoneAccountLabel
                     rowPhoneAccount.visibility = View.VISIBLE
                 } else {
@@ -291,7 +316,7 @@ class CallerOverlayService : Service() {
 
                 val rowUserNote = view.findViewById<LinearLayout>(R.id.rowUserNote)
                 val tvUserNote = view.findViewById<TextView>(R.id.tvUserNote)
-                if (!userNote.isNullOrBlank() && cardSize == CallerCardSize.EXPANDED) {
+                if (!isLockedPresentation && !userNote.isNullOrBlank() && cardSize == CallerCardSize.EXPANDED) {
                     tvUserNote.text = userNote
                     rowUserNote.visibility = View.VISIBLE
                 } else {
@@ -300,7 +325,7 @@ class CallerOverlayService : Service() {
 
                 val rowEmail = view.findViewById<LinearLayout>(R.id.rowEmail)
                 val tvEmail = view.findViewById<TextView>(R.id.tvEmail)
-                if (!email.isNullOrEmpty() && cardSize == CallerCardSize.EXPANDED) {
+                if (!isLockedPresentation && !email.isNullOrEmpty() && cardSize == CallerCardSize.EXPANDED) {
                     tvEmail.text = email
                     rowEmail.visibility = View.VISIBLE
                 } else {
@@ -309,7 +334,7 @@ class CallerOverlayService : Service() {
 
                 val rowLocation = view.findViewById<LinearLayout>(R.id.rowLocation)
                 val tvLocation = view.findViewById<TextView>(R.id.tvLocation)
-                if (!location.isNullOrEmpty() && cardSize == CallerCardSize.EXPANDED) {
+                if (!isLockedPresentation && !location.isNullOrEmpty() && cardSize == CallerCardSize.EXPANDED) {
                     tvLocation.text = location
                     rowLocation.visibility = View.VISIBLE
                 } else {
@@ -518,12 +543,27 @@ class CallerOverlayService : Service() {
             val isLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
             
             val displayPrefs = Test15Preferences.getInstance(applicationContext)
-            val cardSize = displayPrefs.callerCardSize()
-            val cardPosition = displayPrefs.callerCardPosition()
+            val cardSize = if (activeLockedPresentation) {
+                CallerCardSize.COMPACT
+            } else {
+                displayPrefs.callerCardSize()
+            }
+            val cardPosition = if (activeLockedPresentation) {
+                CallerCardPosition.UPPER
+            } else {
+                displayPrefs.callerCardPosition()
+            }
             val maxWidthPx = ((if (cardSize == CallerCardSize.COMPACT) 360 else 420) * displayMetrics.density).toInt()
             val preferredWidth = (screenWidth * if (cardSize == CallerCardSize.COMPACT) 0.88 else 0.95).toInt()
             params?.width = if (preferredWidth > maxWidthPx) maxWidthPx else preferredWidth
-            params?.y = when (cardPosition) {
+            params?.gravity = if (activeLockedPresentation) {
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            } else {
+                Gravity.CENTER
+            }
+            params?.y = if (activeLockedPresentation) {
+                (24 * displayMetrics.density).toInt()
+            } else when (cardPosition) {
                 CallerCardPosition.UPPER -> -(screenHeight * if (isLandscape) 0.15f else 0.30f).toInt()
                 CallerCardPosition.CENTER -> if (isLandscape) {
                     (screenHeight * 0.15f).toInt()
@@ -557,11 +597,14 @@ class CallerOverlayService : Service() {
         previewDismissJob = null
         stopMonitoringCallEnd()
         presentationId++
+        val generationBeingCleared = activeCallGeneration
         if (invalidateActiveCall) {
-            activeCallGeneration?.let(activeIncomingCallGeneration::invalidate)
+            generationBeingCleared?.let(activeIncomingCallGeneration::invalidate)
         }
+        generationBeingCleared?.let(LockedCallerCardController::onPresentationCleared)
         activeCallGeneration = null
         activeNormalizedNumber = null
+        activeLockedPresentation = false
         IncomingOverlayFallbackNotification.cancel(applicationContext)
         pendingVerificationState = NumberVerificationState.UNAVAILABLE
         pendingLookupSource = null
@@ -633,25 +676,12 @@ class CallerOverlayService : Service() {
     private fun bindRecentCall(view: View, interaction: RecentCallInteraction) {
         val icon = view.findViewById<ImageView>(R.id.ivRecentCallType)
         val text = view.findViewById<TextView>(R.id.tvRecentCallTime)
-        val iconDetails = when (interaction.type) {
-            RecentCallType.INCOMING ->
-                R.drawable.ic_call_incoming to R.string.recent_call_incoming
-            RecentCallType.OUTGOING ->
-                R.drawable.ic_call_outgoing to R.string.recent_call_outgoing
-            RecentCallType.MISSED ->
-                R.drawable.ic_call_missed to R.string.recent_call_missed
-            RecentCallType.REJECTED ->
-                R.drawable.ic_call_rejected to R.string.recent_call_rejected
-            RecentCallType.BLOCKED ->
-                R.drawable.ic_call_blocked to R.string.recent_call_blocked
-            RecentCallType.VOICEMAIL ->
-                R.drawable.ic_call_voicemail to R.string.recent_call_voicemail
-            RecentCallType.ANSWERED_ELSEWHERE ->
-                R.drawable.ic_call_answered_elsewhere to R.string.recent_call_answered_elsewhere
-        }
-        icon.setImageResource(iconDetails.first)
-        icon.contentDescription = getString(iconDetails.second)
-        text.text = formatRecentCallTime(interaction.timestampMillis)
+        icon.setImageResource(R.drawable.ic_history)
+        icon.contentDescription = getString(R.string.last_seen)
+        text.text = formatLastSeenPresentation(
+            label = getString(R.string.last_seen),
+            formattedTimestamp = formatRecentCallTime(interaction.timestampMillis)
+        )
         view.findViewById<LinearLayout>(R.id.rowRecentCall).visibility = View.VISIBLE
     }
 

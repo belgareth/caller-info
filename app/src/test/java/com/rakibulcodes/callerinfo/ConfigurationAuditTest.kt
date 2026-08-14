@@ -218,12 +218,13 @@ class ConfigurationAuditTest {
             "src/main/java/com/rakibulcodes/callerinfo/OfflineLookupWorker.kt"
         ).readText()
         val lockedCard = sourceFile(
-            "src/main/java/com/rakibulcodes/callerinfo/LockedCallerCardActivity.kt"
+            "src/main/java/com/rakibulcodes/callerinfo/LockedCallerCardController.kt"
         ).readText()
         val fallback = sourceFile(
             "src/main/java/com/rakibulcodes/callerinfo/IncomingOverlayFallbackNotification.kt"
         ).readText()
         val layout = sourceFile("src/main/res/layout/layout_overlay_card.xml").readText()
+        val manifest = sourceFile("src/main/AndroidManifest.xml").readText()
 
         assertTrue(processor.contains("presentInitial("))
         assertTrue(processor.indexOf("presentInitial(") < processor.indexOf("findContactName("))
@@ -240,7 +241,22 @@ class ConfigurationAuditTest {
         assertTrue(screeningService.contains("LockedCallerCardController.clearCurrent(applicationContext)"))
         assertTrue(lockedCard.contains("?.isDeviceLocked == true"))
         assertFalse(lockedCard.contains("?.isKeyguardLocked == true"))
-        assertTrue(lockedCard.indexOf("manager.notify(NOTIFICATION_ID") < lockedCard.indexOf("monitorCallEnd(context.applicationContext)"))
+        assertTrue(lockedCard.contains("CallerOverlayService::class.java"))
+        assertFalse(lockedCard.contains("startActivity("))
+        assertFalse(lockedCard.contains("setFullScreenIntent"))
+        assertFalse(lockedCard.contains("PendingIntent.getActivity"))
+        assertFalse(manifest.contains("LockedCallerCardActivity"))
+        assertFalse(manifest.contains("USE_FULL_SCREEN_INTENT"))
+        assertTrue(overlay.contains("isLockedPresentation"))
+        assertTrue(overlay.contains("CallerCardSize.COMPACT"))
+        assertTrue(overlay.contains("Gravity.TOP or Gravity.CENTER_HORIZONTAL"))
+        assertTrue(overlay.contains("WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or"))
+        assertTrue(overlay.contains("WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL"))
+        assertTrue(overlay.contains("if (!isLockedPresentation &&"))
+        assertFalse(fallback.contains("startActivity("))
+        assertFalse(fallback.contains("setFullScreenIntent"))
+        assertFalse(fallback.contains("LockedCallerCardActivity"))
+        assertTrue(fallback.contains("LockedCallerCardController.onPresentationCleared(generation)"))
         assertTrue(fallback.indexOf("manager.notify(NOTIFICATION_ID") < fallback.indexOf("monitorCallEnd(context.applicationContext, generation)"))
     }
 

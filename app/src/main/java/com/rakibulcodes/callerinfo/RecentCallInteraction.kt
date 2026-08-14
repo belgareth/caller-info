@@ -20,6 +20,9 @@ data class RecentCallInteraction(
     val timestampMillis: Long
 )
 
+fun formatLastSeenPresentation(label: String, formattedTimestamp: String): String =
+    "$label · $formattedTimestamp"
+
 data class RecentCallRecord(
     val number: String?,
     val type: RecentCallType?,

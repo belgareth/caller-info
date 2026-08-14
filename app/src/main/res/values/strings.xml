@@ -80,6 +80,7 @@
     <string name="recent_call_voicemail">Voicemail</string>
     <string name="recent_call_answered_elsewhere">Answered on another device</string>
     <string name="recent_call_yesterday">Yesterday</string>
+    <string name="last_seen">Last seen</string>
     <string name="header_app_status">App status</string>
     <string name="status_caller_screening">Caller screening role</string>
     <string name="status_overlay">Display over other apps</string>
@@ -169,7 +170,6 @@
     <string name="status_connected">Connected</string>
     <string name="status_disconnected">Disconnected</string>
     <string name="status_telegram">Telegram</string>
-    <string name="status_full_screen_caller_card">Lock-screen caller card</string>
     <string name="status_battery_optimization">Background battery access</string>
     <string name="status_background_restriction">Background restriction</string>
     <string name="battery_background_settings">Battery &amp; background settings</string>

@@ -1198,10 +1198,6 @@ class MainActivity : AppCompatActivity() {
                 roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true
         val notificationsRelevant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
         val powerManager = getSystemService(PowerManager::class.java)
-        val fullScreenRelevant = Build.VERSION.SDK_INT >= 34
-        val fullScreenAllowed = if (Build.VERSION.SDK_INT >= 34) {
-            getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
-        } else true
         val lastRemoteMillis = repository.lastSuccessfulRemoteLookupMillis()
         val lastRemoteText = lastRemoteMillis?.let {
             android.text.format.DateUtils.getRelativeTimeSpanString(
@@ -1221,8 +1217,6 @@ class MainActivity : AppCompatActivity() {
                 !notificationsRelevant ||
                     isPermissionAllowed(android.Manifest.permission.POST_NOTIFICATIONS),
             telegramReady = telegramManager.isReady(),
-            fullScreenRelevant = fullScreenRelevant,
-            fullScreenAllowed = fullScreenAllowed,
             batteryOptimizationStatus = batteryOptimizationStatus(
                 sdkInt = Build.VERSION.SDK_INT,
                 ignoringBatteryOptimizations = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1282,19 +1276,6 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
             }
-            AppStatusType.FULL_SCREEN_CALLER_CARD -> {
-                if (Build.VERSION.SDK_INT >= 34) {
-                    runCatching {
-                        startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-                            data = Uri.parse("package:$packageName")
-                        })
-                    }.onFailure {
-                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.parse("package:$packageName")
-                        })
-                    }
-                }
-            }
             AppStatusType.BATTERY_OPTIMIZATION,
             AppStatusType.BACKGROUND_RESTRICTION -> openBatteryBackgroundSettings()
             AppStatusType.TELEGRAM,
@@ -1314,7 +1295,6 @@ class MainActivity : AppCompatActivity() {
         AppStatusType.PREVIOUS_CALL_CONTEXT -> R.string.status_previous_call_context
         AppStatusType.NOTIFICATIONS -> R.string.status_notifications
         AppStatusType.TELEGRAM -> R.string.status_telegram
-        AppStatusType.FULL_SCREEN_CALLER_CARD -> R.string.status_full_screen_caller_card
         AppStatusType.BATTERY_OPTIMIZATION -> R.string.status_battery_optimization
         AppStatusType.BACKGROUND_RESTRICTION -> R.string.status_background_restriction
         AppStatusType.PENDING_LOOKUPS -> R.string.status_pending_lookups

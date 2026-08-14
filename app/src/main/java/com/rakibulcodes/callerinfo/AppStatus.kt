@@ -8,7 +8,6 @@ enum class AppStatusType {
     PREVIOUS_CALL_CONTEXT,
     NOTIFICATIONS,
     TELEGRAM,
-    FULL_SCREEN_CALLER_CARD,
     BATTERY_OPTIMIZATION,
     BACKGROUND_RESTRICTION,
     PENDING_LOOKUPS,
@@ -56,8 +55,6 @@ data class AppStatusSnapshot(
     val notificationsRelevant: Boolean,
     val notificationsAllowed: Boolean,
     val telegramReady: Boolean = false,
-    val fullScreenRelevant: Boolean = false,
-    val fullScreenAllowed: Boolean = true,
     val batteryOptimizationStatus: BatteryOptimizationStatus = BatteryOptimizationStatus.UNAVAILABLE,
     val backgroundRestrictionStatus: BackgroundRestrictionStatus = BackgroundRestrictionStatus.UNAVAILABLE,
     val pendingLookupCount: Int = 0,
@@ -137,13 +134,6 @@ fun buildAppStatusItems(snapshot: AppStatusSnapshot): List<AppStatusItem> {
 
     if (snapshot.notificationsRelevant) {
         items += permissionStatus(AppStatusType.NOTIFICATIONS, snapshot.notificationsAllowed)
-    }
-    if (snapshot.fullScreenRelevant) {
-        items += AppStatusItem(
-            type = AppStatusType.FULL_SCREEN_CALLER_CARD,
-            value = if (snapshot.fullScreenAllowed) AppStatusValue.ALLOWED else AppStatusValue.NOT_ALLOWED,
-            action = if (snapshot.fullScreenAllowed) AppStatusAction.NONE else AppStatusAction.OPEN_SETTINGS
-        )
     }
     return items
 }

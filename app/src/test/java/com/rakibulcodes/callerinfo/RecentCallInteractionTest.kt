@@ -1,6 +1,7 @@
 package com.rakibulcodes.callerinfo
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -334,6 +335,28 @@ class RecentCallInteractionTest {
         ).findPreviousCall("0712345678", 1_000, config)
 
         assertEquals(RecentCallType.INCOMING, result?.type)
+    }
+
+    @Test
+    fun lastSeenPresentationUsesNeutralTruthfulWording() {
+        val value = formatLastSeenPresentation("Last seen", "Yesterday, 18:42")
+
+        assertEquals("Last seen · Yesterday, 18:42", value)
+        assertFalse(value.contains("Incoming", ignoreCase = true))
+        assertFalse(value.contains("Missed", ignoreCase = true))
+        assertFalse(value.contains("Outgoing", ignoreCase = true))
+    }
+
+    @Test
+    fun stalePresentationCannotBindLastSeenToReplacementCaller() {
+        assertEquals(
+            false,
+            isRecentCallPresentationCurrent(
+                expectedPresentationId = 4,
+                currentPresentationId = 5,
+                sameOverlayView = true
+            )
+        )
     }
 
     @Test
