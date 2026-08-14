@@ -22,7 +22,12 @@ object IncomingCallProcessor {
         generation: Long,
         isCurrent: (Long, String) -> Boolean
     ) {
-        if (!isCurrent(generation, normalizedNumber)) return
+        val diagnostics = CallerDiagnostics.getInstance(context)
+        diagnostics.record(CallerDiagnosticEvent.PROCESSOR_STARTED, generation)
+        if (!isCurrent(generation, normalizedNumber)) {
+            diagnostics.record(CallerDiagnosticEvent.PRESENTATION_STALE, generation)
+            return
+        }
         val prefs = context.getSharedPreferences("Settings", Context.MODE_PRIVATE)
         val isEnabled = prefs.getBoolean("enabled", false)
         val lookupKnown = prefs.getBoolean("lookup_known", false)
@@ -112,7 +117,17 @@ object IncomingCallProcessor {
         normalizedNumber: String,
         isCurrent: (Long, String) -> Boolean
     ) {
-        if (!isCurrent(generation, normalizedNumber)) return
+        if (!isCurrent(generation, normalizedNumber)) {
+            CallerDiagnostics.getInstance(context).record(
+                CallerDiagnosticEvent.PRESENTATION_STALE,
+                generation
+            )
+            return
+        }
+        CallerDiagnostics.getInstance(context).record(
+            CallerDiagnosticEvent.INITIAL_PRESENTATION_REQUESTED,
+            generation
+        )
         presentIncoming(
             context = context,
             callerInfo = CallerInfoEntity(
@@ -204,12 +219,20 @@ object IncomingCallProcessor {
         }
 
         val deviceLocked = LockedCallerCardController.isDeviceLocked(context)
-        when (
-            selectIncomingPresentationRoute(
+        val route = selectIncomingPresentationRoute(
                 deviceLocked = deviceLocked,
                 lockedPresentationAlreadyActive = LockedCallerCardController.isActive(generation)
             )
-        ) {
+        CallerDiagnostics.getInstance(context).record(
+            CallerDiagnosticEvent.OVERLAY_START_REQUESTED,
+            generation,
+            if (route == IncomingPresentationRoute.LOCKED_CALLER_CARD) {
+                CallerDiagnosticStatus.LOCKED_CALLER_CARD
+            } else {
+                CallerDiagnosticStatus.UNLOCKED_OVERLAY
+            }
+        )
+        when (route) {
             IncomingPresentationRoute.LOCKED_CALLER_CARD -> {
                 LockedCallerCardController.present(
                     context = context,
@@ -251,6 +274,11 @@ object IncomingCallProcessor {
         normalizedNumber: String
     ) {
         if (!Settings.canDrawOverlays(context)) {
+            CallerDiagnostics.getInstance(context).record(
+                CallerDiagnosticEvent.FALLBACK_NOTIFICATION_REQUESTED,
+                generation,
+                CallerDiagnosticStatus.OVERLAY_PERMISSION_MISSING
+            )
             IncomingOverlayFallbackNotification.show(
                 context = context,
                 number = normalizedNumber,
@@ -280,7 +308,16 @@ object IncomingCallProcessor {
         }
         try {
             context.startService(overlayIntent)
+            CallerDiagnostics.getInstance(context).record(
+                CallerDiagnosticEvent.OVERLAY_PRESENTED,
+                generation
+            )
         } catch (_: IllegalStateException) {
+            CallerDiagnostics.getInstance(context).record(
+                CallerDiagnosticEvent.OVERLAY_START_FAILED,
+                generation,
+                CallerDiagnosticStatus.START_NOT_ALLOWED
+            )
             IncomingOverlayFallbackNotification.show(
                 context = context,
                 number = normalizedNumber,
@@ -289,6 +326,11 @@ object IncomingCallProcessor {
                 generation = generation
             )
         } catch (_: SecurityException) {
+            CallerDiagnostics.getInstance(context).record(
+                CallerDiagnosticEvent.OVERLAY_START_FAILED,
+                generation,
+                CallerDiagnosticStatus.SECURITY_EXCEPTION
+            )
             IncomingOverlayFallbackNotification.show(
                 context = context,
                 number = normalizedNumber,

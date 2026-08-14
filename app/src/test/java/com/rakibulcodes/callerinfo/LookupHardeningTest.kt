@@ -42,9 +42,14 @@ import com.rakibulcodes.callerinfo.data.selectIncomingPresentationRoute
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -196,6 +201,80 @@ class LookupHardeningTest {
         assertEquals("result", first.await())
         assertEquals("result", second.await())
         assertEquals(1, executions.get())
+    }
+
+    @Test
+    fun cancelledPresentationWaiterDoesNotCancelRepositoryOwnedPersistence() = runBlocking {
+        val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val singleFlight = SameKeySingleFlight<String, String>(repositoryScope)
+        val remoteStarted = CompletableDeferred<Unit>()
+        val releaseRemote = CompletableDeferred<Unit>()
+        val persisted = CompletableDeferred<Unit>()
+
+        val presentationWaiter = launch {
+            singleFlight.run("same-key") {
+                remoteStarted.complete(Unit)
+                releaseRemote.await()
+                persisted.complete(Unit)
+                "useful"
+            }
+        }
+        remoteStarted.await()
+        presentationWaiter.cancelAndJoin()
+        releaseRemote.complete(Unit)
+
+        withTimeout(2_000) { persisted.await() }
+        repositoryScope.cancel()
+    }
+
+    @Test
+    fun sameKeyRepositoryOperationPersistsOnlyOnce() = runBlocking {
+        val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val singleFlight = SameKeySingleFlight<String, String>(repositoryScope)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val saves = AtomicInteger()
+        val first = async {
+            singleFlight.run("same-key") {
+                entered.complete(Unit)
+                release.await()
+                saves.incrementAndGet()
+                "useful"
+            }
+        }
+        entered.await()
+        val second = async(start = CoroutineStart.UNDISPATCHED) {
+            singleFlight.run("same-key") { "duplicate" }
+        }
+        release.complete(Unit)
+
+        assertEquals("useful", first.await())
+        assertEquals("useful", second.await())
+        assertEquals(1, saves.get())
+        repositoryScope.cancel()
+    }
+
+    @Test
+    fun clearEpochRejectsLateRepositoryPersistence() = runBlocking {
+        var epoch = 4L
+        var writes = 0
+        val result = saveCallerRecord(
+            expectedCacheEpoch = 4L,
+            currentCacheEpoch = { epoch }
+        ) {
+            writes++
+        }
+        assertEquals(SaveCallerResult.Saved, result)
+
+        epoch = 5L
+        val lateResult = saveCallerRecord(
+            expectedCacheEpoch = 4L,
+            currentCacheEpoch = { epoch }
+        ) {
+            writes++
+        }
+        assertEquals(SaveCallerResult.RejectedAfterUserClear, lateResult)
+        assertEquals(1, writes)
     }
 
     @Test

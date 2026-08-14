@@ -49,15 +49,17 @@ class RecentCallRepository private constructor(
     suspend fun recordObservedIncomingCall(
         normalizedNumber: String,
         timestampMillis: Long
-    ) = withContext(Dispatchers.IO) {
-        if (normalizedNumber.isBlank()) return@withContext
-        store.record(
-            RecentCallRecord(
-                number = normalizedNumber,
-                type = RecentCallType.INCOMING,
-                timestampMillis = timestampMillis
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (normalizedNumber.isBlank()) return@withContext false
+        runCatching {
+            store.record(
+                RecentCallRecord(
+                    number = normalizedNumber,
+                    type = RecentCallType.INCOMING,
+                    timestampMillis = timestampMillis
+                )
             )
-        )
+        }.isSuccess
     }
 
     suspend fun findPreviousCall(

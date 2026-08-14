@@ -55,7 +55,7 @@ class OfflineCallerCacheAuditTest {
         val repository = source("data/CallerInfoRepository.kt")
         val localIndex = repository.indexOf("safelyReadLocal(number)")
         val connectivityIndex = repository.indexOf("if (!isNetworkAvailable())")
-        val remoteIndex = repository.indexOf("sharedRemoteLookup(number)")
+        val remoteIndex = repository.indexOf("sharedRemoteLookup(number, lookupEpoch)")
 
         assertTrue(localIndex >= 0)
         assertTrue(connectivityIndex > localIndex)
@@ -76,11 +76,11 @@ class OfflineCallerCacheAuditTest {
     fun staleLocalDataIsPresentedBeforeSharedRefresh() {
         val repository = source("data/CallerInfoRepository.kt")
         val presentIndex = repository.indexOf("onLocalResult(localResult)")
-        val refreshIndex = repository.indexOf("sharedRemoteLookup(number)")
+        val refreshIndex = repository.indexOf("sharedRemoteLookup(number, lookupEpoch)")
 
         assertTrue(presentIndex >= 0)
         assertTrue(refreshIndex > presentIndex)
-        assertTrue(repository.contains("singleFlight.run(number)"))
+        assertTrue(repository.contains("singleFlight.run(RemoteLookupKey(number, lookupEpoch))"))
         assertTrue(repository.contains("RemoteBotTransactionCoordinator.run"))
     }
 
@@ -277,10 +277,43 @@ class OfflineCallerCacheAuditTest {
         assertTrue(returnLocalIndex > freshCheckIndex)
         assertTrue(presentLocalIndex > returnLocalIndex)
 
-        val refreshBranch = repository.substringAfter("return when (val remote = sharedRemoteLookup(number))")
+        val refreshBranch = repository.substringAfter("val completion = sharedRemoteLookup(number, lookupEpoch)")
         assertTrue(refreshBranch.contains("is RemoteLookupOutcome.Useful ->"))
-        assertTrue(refreshBranch.contains("persistUseful(number, remote.callerInfo, lookupEpoch)"))
+        assertTrue(repository.contains("persistUseful("))
+        assertTrue(repository.contains("removePendingAfterSave = true"))
         assertTrue(refreshBranch.contains("is RemoteLookupOutcome.Failure ->"))
+    }
+
+    @Test
+    fun remotePersistenceIsRepositoryOwnedAndHistoryClearAdvancesEpoch() {
+        val repository = source("data/CallerInfoRepository.kt")
+        val sharedOperation = repository.substringAfter(
+            "singleFlight.run(RemoteLookupKey(number, lookupEpoch))"
+        ).substringBefore("} catch (cancelled: CancellationException)")
+
+        assertTrue(sharedOperation.contains("RemoteBotTransactionCoordinator.run"))
+        assertTrue(sharedOperation.contains("persistUseful("))
+        assertTrue(sharedOperation.contains("expectedCacheEpoch = lookupEpoch"))
+        assertTrue(repository.contains("suspend fun clearHistory()"))
+        assertTrue(repository.contains("clearSavedCallerInformation()"))
+        assertTrue(repository.contains("cacheEpoch.incrementAndGet()"))
+    }
+
+    @Test
+    fun forceRefreshAndIncomingPipelineEmitPrivacySafeDiagnosticMilestones() {
+        val activity = source("MainActivity.kt")
+        val repository = source("data/CallerInfoRepository.kt")
+        val screening = source("CallerScreeningService.kt")
+
+        assertTrue(activity.contains("MANUAL_FORCE_REFRESH_REQUESTED"))
+        assertTrue(activity.contains("MANUAL_GENERATION_CREATED"))
+        assertTrue(repository.contains("NETWORK_AVAILABLE"))
+        assertTrue(repository.contains("NETWORK_UNAVAILABLE"))
+        assertTrue(repository.contains("REMOTE_LOOKUP_STARTED"))
+        assertTrue(repository.contains("REMOTE_RESPONSE_CORRELATED"))
+        assertTrue(repository.contains("PERSIST_SUCCESS"))
+        assertTrue(screening.contains("SCREEN_CALLBACK_RECEIVED"))
+        assertTrue(screening.contains("OBSERVED_CALL_SAVE_SUCCESS"))
     }
 
     private fun source(relativePath: String): String {

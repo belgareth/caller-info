@@ -13,11 +13,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 class CallerScreeningService : CallScreeningService() {
+    private val diagnostics by lazy { CallerDiagnostics.getInstance(applicationContext) }
+
     override fun onScreenCall(callDetails: Call.Details) {
+        diagnostics.record(CallerDiagnosticEvent.SCREEN_CALLBACK_RECEIVED)
         val snapshot = captureIncomingCall(callDetails)
+        if (snapshot?.isIncoming != true) {
+            diagnostics.record(CallerDiagnosticEvent.SCREEN_NOT_INCOMING)
+        }
         val coordinator = ScreeningCoordinator(
             responder = ScreeningResponder {
                 respondToCall(callDetails, safeAllowResponse())
+                diagnostics.record(CallerDiagnosticEvent.SCREEN_RESPONSE_SENT)
             },
             dispatcher = IncomingCallDispatcher {
                 snapshot?.let(::dispatchIncomingCall)
@@ -71,11 +78,25 @@ class CallerScreeningService : CallScreeningService() {
         IncomingOverlayFallbackNotification.cancel(applicationContext)
         LockedCallerCardController.clearCurrent(applicationContext)
         previousGeneration?.let {
+            diagnostics.record(CallerDiagnosticEvent.GENERATION_INVALIDATED, generation = it)
             CallerOverlayService.clearIncomingPresentation(applicationContext, it)
         }
         val generation = activeIncomingCallGeneration.begin()
+        diagnostics.record(CallerDiagnosticEvent.GENERATION_CREATED, generation = generation)
 
-        IncomingCallLookupRuntime.replace {
+        IncomingCallLookupRuntime.replace(generation, diagnostics) {
+            when {
+                snapshot.presentation != TelecomManager.PRESENTATION_ALLOWED &&
+                    snapshot.presentation != TelecomManager.PRESENTATION_PAYPHONE ->
+                    diagnostics.record(
+                        CallerDiagnosticEvent.SCREEN_PRESENTATION_REJECTED,
+                        generation
+                    )
+                snapshot.value.isNullOrBlank() ->
+                    diagnostics.record(CallerDiagnosticEvent.SCREEN_HANDLE_MISSING, generation)
+                snapshot.scheme != PhoneAccount.SCHEME_TEL ->
+                    diagnostics.record(CallerDiagnosticEvent.SCREEN_SCHEME_REJECTED, generation)
+            }
             val normalizedNumber = normalizePresentedIncomingNumber(
                 input = IncomingNumberInput(
                     presentation = snapshot.presentation,
@@ -92,12 +113,30 @@ class CallerScreeningService : CallScreeningService() {
                 ),
                 config = NumberFormattingPreferences.getInstance(applicationContext).getConfig()
             )
+            diagnostics.record(
+                if (normalizedNumber.isBlank()) {
+                    CallerDiagnosticEvent.NORMALIZATION_FAILED
+                } else {
+                    CallerDiagnosticEvent.NORMALIZATION_SUCCESS
+                },
+                generation
+            )
             if (!activeIncomingCallGeneration.attachNumber(generation, normalizedNumber)) {
+                diagnostics.record(CallerDiagnosticEvent.GENERATION_ATTACH_FAILED, generation)
                 return@replace
             }
-            RecentCallRepository.getInstance(applicationContext).recordObservedIncomingCall(
+            diagnostics.record(CallerDiagnosticEvent.GENERATION_ATTACHED, generation)
+            val observedSaved = RecentCallRepository.getInstance(applicationContext).recordObservedIncomingCall(
                 normalizedNumber = normalizedNumber,
                 timestampMillis = snapshot.cutoffMillis
+            )
+            diagnostics.record(
+                if (observedSaved) {
+                    CallerDiagnosticEvent.OBSERVED_CALL_SAVE_SUCCESS
+                } else {
+                    CallerDiagnosticEvent.OBSERVED_CALL_SAVE_FAILED
+                },
+                generation
             )
 
             IncomingCallProcessor.processCall(
@@ -127,9 +166,19 @@ private object IncomingCallLookupRuntime {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeJob: Job? = null
 
+    private var activeGeneration: Long? = null
+
     @Synchronized
-    fun replace(block: suspend () -> Unit) {
-        activeJob?.cancel()
+    fun replace(
+        generation: Long,
+        diagnostics: CallerDiagnosticTrail,
+        block: suspend () -> Unit
+    ) {
+        activeJob?.let {
+            diagnostics.record(CallerDiagnosticEvent.JOB_CANCELLED, activeGeneration)
+            it.cancel()
+        }
+        activeGeneration = generation
         activeJob = scope.launch { block() }
     }
 }

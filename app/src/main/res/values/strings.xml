@@ -112,6 +112,11 @@
     <string name="preview_only">Preview only</string>
     <string name="native_integration_unavailable">Native integration unavailable on this device.</string>
     <string name="diagnostics">Diagnostics</string>
+    <string name="recent_caller_diagnostics">Recent caller diagnostics</string>
+    <string name="no_caller_diagnostics">No caller diagnostics recorded</string>
+    <string name="copy_diagnostics">Copy diagnostic summary</string>
+    <string name="clear_diagnostics">Clear diagnostics</string>
+    <string name="caller_diagnostics_cleared">Caller diagnostics cleared</string>
     <string name="show_lookup_source">Show lookup source</string>
     <string name="show_lookup_source_description">Show where caller information was found</string>
     <string name="clear_saved_caller_information">Clear saved caller information</string>

@@ -42,6 +42,89 @@ class Test15FeatureTest {
         assertEquals("+10000000002", filtered.single().number)
     }
 
+    @Test fun historyNumberSearchUsesInjectedConfigurationForConfigurationA() {
+        val config = NumberNormalizationConfig(
+            callingCode = "256",
+            localPrefix = "0",
+            nationalNumberLength = 9,
+            acceptWithoutPrefix = true
+        )
+        val normalize: (String) -> String = { normalizePhoneNumber(it, config) }
+        val items = listOf(info("+256712345678", "Remote One", "Carrier A"))
+
+        assertHistoryNumberMatches(
+            items = items,
+            expectedNumber = "+256712345678",
+            normalize = normalize,
+            forms = listOf("0712345678", "712345678", "+256712345678", "00256712345678", "011256712345678", "256712345678")
+        )
+    }
+
+    @Test fun historyNumberSearchUsesInjectedConfigurationForConfigurationB() {
+        val config = NumberNormalizationConfig(
+            callingCode = "254",
+            localPrefix = "0",
+            nationalNumberLength = 9,
+            acceptWithoutPrefix = true
+        )
+        val normalize: (String) -> String = { normalizePhoneNumber(it, config) }
+        val items = listOf(info("+254712345678", "Remote Two", "Carrier B"))
+
+        assertHistoryNumberMatches(
+            items = items,
+            expectedNumber = "+254712345678",
+            normalize = normalize,
+            forms = listOf("0712345678", "712345678", "+254712345678", "00254712345678", "011254712345678", "254712345678")
+        )
+    }
+
+    @Test fun historyNumberSearchUsesDifferentPrefixAndLengthConfiguration() {
+        val config = NumberNormalizationConfig(
+            callingCode = "44",
+            localPrefix = "0",
+            nationalNumberLength = 10,
+            acceptWithoutPrefix = false
+        )
+        val normalize: (String) -> String = { normalizePhoneNumber(it, config) }
+        val items = listOf(info("+442079460958", "Remote Three", "Carrier C"))
+
+        assertHistoryNumberMatches(
+            items = items,
+            expectedNumber = "+442079460958",
+            normalize = normalize,
+            forms = listOf("02079460958", "+442079460958", "00442079460958", "011442079460958", "442079460958")
+        )
+        assertEquals("", normalizePhoneNumber("2079460958", config))
+        // A non-normalizable number query deliberately falls back to ordinary encrypted-item text search.
+        assertEquals(1, filterHistory(items, HistoryFilter(query = "2079460958"), 10_000, normalizeNumber = normalize).size)
+    }
+
+    @Test fun changingNumberConfigurationChangesHistoryNumberEquivalenceWithoutMigration() {
+        val stored = listOf(info("+254712345678", "Remote Four", "Carrier D"))
+        val configurationA = NumberNormalizationConfig("256", "0", 9, acceptWithoutPrefix = true)
+        val configurationB = NumberNormalizationConfig("254", "0", 9, acceptWithoutPrefix = true)
+
+        assertTrue(
+            filterHistory(stored, HistoryFilter(query = "0712345678"), 10_000) {
+                normalizePhoneNumber(it, configurationA)
+            }.isEmpty()
+        )
+        assertEquals(
+            1,
+            filterHistory(stored, HistoryFilter(query = "0712345678"), 10_000) {
+                normalizePhoneNumber(it, configurationB)
+            }.size
+        )
+    }
+
+    @Test fun historyTextSearchStillMatchesNameAliasCarrierAndCountry() {
+        val item = info("+256712345678", "Remote Name", "Carrier A", alias = "Workshop")
+        val items = listOf(item)
+        listOf("remote name", "workshop", "carrier a", "example").forEach { query ->
+            assertEquals(1, filterHistory(items, HistoryFilter(query = query), 10_000).size)
+        }
+    }
+
     @Test fun aliasTakesPresentationPrecedenceWithoutDestroyingRemoteName() {
         val item = info("+10000000001", "Remote Name", "Carrier", alias = "My Alias")
         assertEquals("My Alias", item.displayName())
@@ -158,6 +241,25 @@ class Test15FeatureTest {
         userAlias = alias,
         favorite = favorite
     )
+
+    private fun assertHistoryNumberMatches(
+        items: List<CallerInfoEntity>,
+        expectedNumber: String,
+        normalize: (String) -> String,
+        forms: List<String>
+    ) {
+        forms.forEach { query ->
+            assertEquals(
+                expectedNumber,
+                filterHistory(
+                    items,
+                    HistoryFilter(query = query),
+                    nowMillis = 10_000,
+                    normalizeNumber = normalize
+                ).single().number
+            )
+        }
+    }
 
     private fun envelope(
         chatId: Long = 7L,

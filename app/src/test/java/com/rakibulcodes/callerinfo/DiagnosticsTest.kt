@@ -71,6 +71,50 @@ class DiagnosticsTest {
     }
 
     @Test
+    fun roleAlreadyHeldEnablesWithoutRequest() {
+        assertEquals(
+            CallerIdRoleDecision(enabled = true, requestRole = false),
+            callerIdRoleDecision(true, roleRequired = true, roleAvailable = true, roleHeld = true)
+        )
+    }
+
+    @Test
+    fun missingRoleNeverPersistsPrematureEnabledState() {
+        assertEquals(
+            CallerIdRoleDecision(enabled = false, requestRole = true),
+            callerIdRoleDecision(true, roleRequired = true, roleAvailable = true, roleHeld = false)
+        )
+    }
+
+    @Test
+    fun deniedOrRevokedRoleReconcilesDisabled() {
+        assertFalse(reconciledCallerIdEnabled(true, true, true, false))
+        assertFalse(callerIdRoleDecision(false, true, true, true).enabled)
+    }
+
+    @Test
+    fun grantedRoleEnablesOnlyAfterAuthoritativeRequery() {
+        assertFalse(callerIdRoleDecision(true, true, true, false).enabled)
+        assertTrue(callerIdRoleDecision(true, true, true, true).enabled)
+    }
+
+    @Test
+    fun roleUiUsesAuthoritativeRequeryAndGuardsProgrammaticSwitchChanges() {
+        val activity = listOf(
+            java.io.File("src/main/java/com/rakibulcodes/callerinfo/MainActivity.kt"),
+            java.io.File("app/src/main/java/com/rakibulcodes/callerinfo/MainActivity.kt")
+        ).first { it.exists() }.readText()
+        val roleCallback = activity.substringAfter("private val roleRequestLauncher")
+            .substringBefore("private val exportCallerDataLauncher")
+
+        assertTrue(roleCallback.contains("isCallerScreeningRoleHeld()"))
+        assertFalse(roleCallback.contains("result.resultCode"))
+        assertTrue(activity.contains("if (updatingCallerIdSwitch) return@setOnCheckedChangeListener"))
+        assertTrue(activity.contains("updatingCallerIdSwitch = true"))
+        assertTrue(activity.contains("reconcileCallerIdRoleState()"))
+    }
+
+    @Test
     fun previousCallContextUsesAppOwnedStateNotPermissionAction() {
         val item = statuses(previousCallContextEnabled = true)
             .first { it.type == AppStatusType.PREVIOUS_CALL_CONTEXT }
@@ -152,6 +196,58 @@ class DiagnosticsTest {
         assertTrue(activity.contains("setNeutralButton(R.string.battery_background_optimization_settings"))
         assertFalse(activity.contains(".setItems(labels)"))
         assertFalse(activity.contains("Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"))
+    }
+
+    @Test
+    fun callerDiagnosticsAreBoundedPersistentClearableAndEnumOnly() {
+        val storage = InMemoryDiagnosticStorage()
+        var now = 100L
+        val trail = CallerDiagnosticTrail(storage, maxEvents = 3) { now++ }
+
+        trail.record(CallerDiagnosticEvent.SCREEN_CALLBACK_RECEIVED)
+        trail.record(CallerDiagnosticEvent.GENERATION_CREATED, generation = 7)
+        trail.record(CallerDiagnosticEvent.NETWORK_AVAILABLE, status = CallerDiagnosticStatus.ACTIVE_NETWORK_VALIDATED)
+        trail.record(CallerDiagnosticEvent.REMOTE_LOOKUP_STARTED)
+
+        val restored = CallerDiagnosticTrail(storage, maxEvents = 3) { now++ }
+        assertEquals(3, restored.entries().size)
+        assertEquals(CallerDiagnosticEvent.GENERATION_CREATED, restored.entries().first().event)
+        assertTrue(restored.summary().contains("REMOTE_LOOKUP_STARTED"))
+        assertFalse(restored.summary().contains("phone"))
+        assertFalse(restored.summary().contains("name"))
+
+        restored.clear()
+        assertTrue(restored.entries().isEmpty())
+    }
+
+    @Test
+    fun refreshFailuresExposeNetworkAndAuthenticationAsDifferentReasons() {
+        assertEquals(
+            "Internet unavailable",
+            com.rakibulcodes.callerinfo.data.remoteLookupFailureMessage(
+                com.rakibulcodes.callerinfo.data.RemoteLookupFailure.CONNECTIVITY_UNAVAILABLE
+            )
+        )
+        assertEquals(
+            "Remote lookup is not ready. Open the app and check sign-in.",
+            com.rakibulcodes.callerinfo.data.remoteLookupFailureMessage(
+                com.rakibulcodes.callerinfo.data.RemoteLookupFailure.AUTHENTICATION_NOT_READY
+            )
+        )
+    }
+
+    @Test
+    fun diagnosticPersistenceSchemaHasNoFreeFormPrivateFields() {
+        val diagnosticSource = listOf(
+            java.io.File("src/main/java/com/rakibulcodes/callerinfo/CallerDiagnosticTrail.kt"),
+            java.io.File("app/src/main/java/com/rakibulcodes/callerinfo/CallerDiagnosticTrail.kt")
+        ).first { it.exists() }.readText()
+
+        assertFalse(diagnosticSource.contains("rawNumber"))
+        assertFalse(diagnosticSource.contains("phoneNumber"))
+        assertFalse(diagnosticSource.contains("callerName"))
+        assertFalse(diagnosticSource.contains("chatId"))
+        assertFalse(diagnosticSource.contains("responseText"))
     }
 
     @Test
@@ -241,4 +337,11 @@ class DiagnosticsTest {
             backgroundRestrictionStatus = backgroundRestrictionStatus
         )
     )
+
+    private class InMemoryDiagnosticStorage : CallerDiagnosticStorage {
+        private var value: String? = null
+        override fun read(): String? = value
+        override fun write(value: String) { this.value = value }
+        override fun clear() { value = null }
+    }
 }

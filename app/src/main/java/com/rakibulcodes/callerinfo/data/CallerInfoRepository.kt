@@ -5,6 +5,9 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.room.withTransaction
 import com.rakibulcodes.callerinfo.CallerCachePolicy
+import com.rakibulcodes.callerinfo.CallerDiagnosticEvent
+import com.rakibulcodes.callerinfo.CallerDiagnosticStatus
+import com.rakibulcodes.callerinfo.CallerDiagnostics
 import com.rakibulcodes.callerinfo.Test15Preferences
 import com.rakibulcodes.callerinfo.callerCacheIsFresh
 import com.rakibulcodes.callerinfo.CallerLookupResult
@@ -39,11 +42,13 @@ class CallerInfoRepository(private val context: Context) {
     private val telegramManager = TelegramManager.getInstance(context)
     private val numberFormattingPreferences = NumberFormattingPreferences.getInstance(context)
     private val test15Preferences = Test15Preferences.getInstance(context)
+    private val diagnostics = CallerDiagnostics.getInstance(context)
     private val cacheCodec: CallerCacheCodec = AndroidCallerCacheCodec()
     private val legacyMigrationMutex = Mutex()
     @Volatile private var secureCacheReady = false
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val singleFlight = SameKeySingleFlight<String, RemoteLookupOutcome>(refreshScope)
+    private val singleFlight =
+        SameKeySingleFlight<RemoteLookupKey, RemoteLookupCompletion>(refreshScope)
     private val storageMutex = Mutex()
     private val cacheEpoch = AtomicLong(0)
     private val pendingQueueEpoch = AtomicLong(0)
@@ -70,6 +75,7 @@ class CallerInfoRepository(private val context: Context) {
         val local = safelyReadLocal(number)?.takeIf(::hasUsefulCallerInformation)
 
         if (local != null) {
+            diagnostics.record(CallerDiagnosticEvent.LOCAL_CACHE_HIT)
             val localResult = CallerLookupResult(local, CallerLookupSource.LOCAL)
             if (
                 !forceRemoteRefresh &&
@@ -90,10 +96,9 @@ class CallerInfoRepository(private val context: Context) {
                 return localResult
             }
 
-            return when (val remote = sharedRemoteLookup(number)) {
+            val completion = sharedRemoteLookup(number, lookupEpoch)
+            return when (val remote = completion.outcome) {
                 is RemoteLookupOutcome.Useful -> {
-                    val saveResult = persistUseful(number, remote.callerInfo, lookupEpoch)
-                    if (saveResult == SaveCallerResult.Saved) removePending(number)
                     if (requestStillValid()) {
                         CallerLookupResult(
                             safelyReadLocal(number) ?: remote.callerInfo,
@@ -134,10 +139,10 @@ class CallerInfoRepository(private val context: Context) {
             )
         }
 
-        return when (val remote = sharedRemoteLookup(number)) {
+        val completion = sharedRemoteLookup(number, lookupEpoch)
+        return when (val remote = completion.outcome) {
             is RemoteLookupOutcome.Useful -> {
-                val saveResult = persistUseful(number, remote.callerInfo, lookupEpoch)
-                if (saveResult == SaveCallerResult.Saved) removePending(number)
+                val saveResult = completion.saveResult ?: SaveCallerResult.Failed
                 val persistenceRetryScheduled =
                     saveResult == SaveCallerResult.Failed &&
                         shouldScheduleDeferredRetry(requestStillValid(), retainDeferredRetryAfterRequestEnds) &&
@@ -192,8 +197,7 @@ class CallerInfoRepository(private val context: Context) {
     }
 
     suspend fun clearHistory() {
-        ensureSecureCacheReady()
-        db.callerInfoDao().clearAll()
+        clearSavedCallerInformation()
     }
 
     suspend fun clearSavedCallerInformation(): Boolean =
@@ -206,6 +210,7 @@ class CallerInfoRepository(private val context: Context) {
                 }
                 purgeDeletedPlaintextPages()
                 cacheEpoch.incrementAndGet()
+                pendingQueueEpoch.incrementAndGet()
             }
             true
         } catch (cancelled: CancellationException) {
@@ -446,16 +451,10 @@ class CallerInfoRepository(private val context: Context) {
 
             processed++
             val lookupEpoch = cacheEpoch.get()
-            when (val outcome = sharedRemoteLookup(canonicalNumber)) {
+            val completion = sharedRemoteLookup(canonicalNumber, lookupEpoch)
+            when (val outcome = completion.outcome) {
                 is RemoteLookupOutcome.Useful -> {
-                    when (
-                        persistUseful(
-                            canonicalNumber,
-                            outcome.callerInfo,
-                            lookupEpoch,
-                            removePendingAfterSave = true
-                        )
-                    ) {
+                    when (completion.saveResult ?: SaveCallerResult.Failed) {
                         SaveCallerResult.Saved -> Unit
                         SaveCallerResult.Failed -> {
                             hadTransientFailure = true
@@ -560,23 +559,22 @@ class CallerInfoRepository(private val context: Context) {
         ) {
             return SaveCallerResult.Failed
         }
-        val savedAt = now()
-        val existing = safelyReadLocal(number)
-        val saved = callerInfo.copy(
-            number = number,
-            error = null,
-            timestamp = savedAt,
-            lastSuccessfullyUpdatedMillis = savedAt,
-            userAlias = existing?.userAlias,
-            userNote = existing?.userNote,
-            favorite = existing?.favorite ?: false
-        )
-
         return storageMutex.withLock {
             saveCallerRecord(
                 expectedCacheEpoch = expectedCacheEpoch,
                 currentCacheEpoch = cacheEpoch::get
             ) {
+                val savedAt = now()
+                val existing = safelyReadLocal(number)
+                val saved = callerInfo.copy(
+                    number = number,
+                    error = null,
+                    timestamp = savedAt,
+                    lastSuccessfullyUpdatedMillis = savedAt,
+                    userAlias = existing?.userAlias,
+                    userNote = existing?.userNote,
+                    favorite = existing?.favorite ?: false
+                )
                 if (removePendingAfterSave) {
                     db.withTransaction {
                         writeSavedCaller(saved, markRemoteSuccess = true)
@@ -651,30 +649,101 @@ class CallerInfoRepository(private val context: Context) {
         }
     }
 
-    private suspend fun sharedRemoteLookup(number: String): RemoteLookupOutcome =
-        try {
-            singleFlight.run(number) {
-                RemoteBotTransactionCoordinator.run {
-                    fetchFromTelegram(number)
-                }
+    private suspend fun sharedRemoteLookup(
+        number: String,
+        lookupEpoch: Long
+    ): RemoteLookupCompletion = try {
+        singleFlight.run(RemoteLookupKey(number, lookupEpoch)) {
+            diagnostics.record(CallerDiagnosticEvent.REMOTE_LOOKUP_STARTED)
+            val outcome = try {
+                RemoteBotTransactionCoordinator.run { fetchFromTelegram(number) }
+            } catch (_: LookupTransactionTimeoutException) {
+                RemoteLookupOutcome.Failure(RemoteLookupFailure.RESPONSE_TIMEOUT)
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: LookupTransactionTimeoutException) {
-            RemoteLookupOutcome.Failure(RemoteLookupFailure.RESPONSE_TIMEOUT)
+            val saveResult = if (outcome is RemoteLookupOutcome.Useful) {
+                diagnostics.record(CallerDiagnosticEvent.PERSIST_STARTED)
+                persistUseful(
+                    number = number,
+                    callerInfo = outcome.callerInfo,
+                    expectedCacheEpoch = lookupEpoch,
+                    removePendingAfterSave = true
+                ).also { result ->
+                    diagnostics.record(
+                        event = if (result == SaveCallerResult.Saved) {
+                            CallerDiagnosticEvent.PERSIST_SUCCESS
+                        } else {
+                            CallerDiagnosticEvent.PERSIST_FAILURE
+                        },
+                        status = if (result == SaveCallerResult.RejectedAfterUserClear) {
+                            CallerDiagnosticStatus.REJECTED_AFTER_USER_CLEAR
+                        } else if (result == SaveCallerResult.Failed) {
+                            CallerDiagnosticStatus.PERSISTENCE_FAILURE
+                        } else null
+                    )
+                }
+            } else {
+                diagnostics.record(
+                    CallerDiagnosticEvent.REMOTE_FAILURE,
+                    status = diagnosticStatusFor((outcome as RemoteLookupOutcome.Failure).reason)
+                )
+                null
+            }
+            RemoteLookupCompletion(outcome, saveResult)
         }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    }
 
     private fun isNetworkAvailable(): Boolean {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return false
-        val network = manager.activeNetwork ?: return false
-        val capabilities = manager.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        if (manager == null) {
+            diagnostics.record(
+                CallerDiagnosticEvent.NETWORK_UNAVAILABLE,
+                status = CallerDiagnosticStatus.NO_NETWORK_CAPABILITIES
+            )
+            return false
+        }
+        val network = manager.activeNetwork
+        if (network == null) {
+            diagnostics.record(
+                CallerDiagnosticEvent.NETWORK_UNAVAILABLE,
+                status = CallerDiagnosticStatus.NO_ACTIVE_NETWORK
+            )
+            return false
+        }
+        val capabilities = manager.getNetworkCapabilities(network)
+        if (capabilities == null) {
+            diagnostics.record(
+                CallerDiagnosticEvent.NETWORK_UNAVAILABLE,
+                status = CallerDiagnosticStatus.NO_NETWORK_CAPABILITIES
+            )
+            return false
+        }
+        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            diagnostics.record(
+                CallerDiagnosticEvent.NETWORK_UNAVAILABLE,
+                status = CallerDiagnosticStatus.NO_INTERNET_CAPABILITY
+            )
+            return false
+        }
+        diagnostics.record(
+            CallerDiagnosticEvent.NETWORK_AVAILABLE,
+            status = if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                CallerDiagnosticStatus.ACTIVE_NETWORK_VALIDATED
+            } else {
+                CallerDiagnosticStatus.ACTIVE_NETWORK_UNVALIDATED
+            }
+        )
+        return true
     }
 
     private suspend fun fetchFromTelegram(number: String): RemoteLookupOutcome =
         withContext(Dispatchers.IO) {
             if (!telegramManager.isReady()) {
+                diagnostics.record(
+                    CallerDiagnosticEvent.REMOTE_AUTH_NOT_READY,
+                    status = CallerDiagnosticStatus.TELEGRAM_NOT_READY
+                )
                 return@withContext RemoteLookupOutcome.Failure(
                     RemoteLookupFailure.AUTHENTICATION_NOT_READY
                 )
@@ -691,10 +760,15 @@ class CallerInfoRepository(private val context: Context) {
                             null,
                             true
                         )
+                        diagnostics.record(CallerDiagnosticEvent.REMOTE_SEND_STARTED)
                         val sentMessage = telegramManager.sendSuspend(
                             TdApi.SendMessage(chatId, null, null, null, null, content)
                         ) as? TdApi.Message ?: return@coroutineScope RemoteLookupOutcome.Failure(
                             RemoteLookupFailure.TEMPORARY_TRANSPORT_FAILURE
+                        )
+                        diagnostics.record(
+                            CallerDiagnosticEvent.REMOTE_SEND_SUCCEEDED,
+                            status = CallerDiagnosticStatus.TEMPORARY_MESSAGE_CREATED
                         )
                         requestIdentity = RemoteRequestIdentity(chatId, sentMessage.id)
                         var correlatedSentMessageId = sentMessage.id
@@ -716,6 +790,10 @@ class CallerInfoRepository(private val context: Context) {
                                         ) ?: return@fullMessageForUpdate
                                         requestIdentity = remapped
                                         correlatedSentMessageId = remapped.messageId
+                                        diagnostics.record(
+                                            CallerDiagnosticEvent.REMOTE_SEND_SUCCEEDED,
+                                            status = CallerDiagnosticStatus.SERVER_ID_REMAPPED
+                                        )
                                     }
                                 )
                             },
@@ -735,7 +813,10 @@ class CallerInfoRepository(private val context: Context) {
                             }
                         )
                         val responseMessage = when (response) {
-                            is CorrelatedResponseResult.Accepted -> response.value
+                            is CorrelatedResponseResult.Accepted -> {
+                                diagnostics.record(CallerDiagnosticEvent.REMOTE_RESPONSE_CORRELATED)
+                                response.value
+                            }
                             CorrelatedResponseResult.Timeout ->
                                 return@coroutineScope RemoteLookupOutcome.Failure(
                                     RemoteLookupFailure.RESPONSE_TIMEOUT
@@ -750,7 +831,11 @@ class CallerInfoRepository(private val context: Context) {
                             ?: return@coroutineScope RemoteLookupOutcome.Failure(
                                 RemoteLookupFailure.PARSING_OR_PROTOCOL_FAILURE
                             )
-                        classifyParsedResponse(number, formattedText)
+                        classifyParsedResponse(number, formattedText).also { outcome ->
+                            if (outcome is RemoteLookupOutcome.Useful) {
+                                diagnostics.record(CallerDiagnosticEvent.REMOTE_USEFUL_RESULT)
+                            }
+                        }
                     } finally {
                         requestIdentity?.let(LATE_RESPONSE_QUARANTINE::add)
                     }
@@ -943,3 +1028,31 @@ private sealed interface RemoteLookupOutcome {
     data class Useful(val callerInfo: CallerInfoEntity) : RemoteLookupOutcome
     data class Failure(val reason: RemoteLookupFailure) : RemoteLookupOutcome
 }
+
+private data class RemoteLookupKey(val number: String, val cacheEpoch: Long)
+
+private data class RemoteLookupCompletion(
+    val outcome: RemoteLookupOutcome,
+    val saveResult: SaveCallerResult?
+)
+
+private fun diagnosticStatusFor(failure: RemoteLookupFailure): CallerDiagnosticStatus =
+    when (failure) {
+        RemoteLookupFailure.CONNECTIVITY_UNAVAILABLE ->
+            CallerDiagnosticStatus.CONNECTIVITY_UNAVAILABLE
+        RemoteLookupFailure.TEMPORARY_TRANSPORT_FAILURE ->
+            CallerDiagnosticStatus.TEMPORARY_TRANSPORT_FAILURE
+        RemoteLookupFailure.AUTHENTICATION_NOT_READY ->
+            CallerDiagnosticStatus.AUTHENTICATION_NOT_READY
+        RemoteLookupFailure.RATE_LIMITED -> CallerDiagnosticStatus.RATE_LIMITED
+        RemoteLookupFailure.RESPONSE_TIMEOUT -> CallerDiagnosticStatus.RESPONSE_TIMEOUT
+        RemoteLookupFailure.UNCORRELATED_RESPONSE ->
+            CallerDiagnosticStatus.UNCORRELATED_RESPONSE
+        RemoteLookupFailure.PERMANENT_NOT_FOUND ->
+            CallerDiagnosticStatus.PERMANENT_NOT_FOUND
+        RemoteLookupFailure.PARSING_OR_PROTOCOL_FAILURE ->
+            CallerDiagnosticStatus.PARSING_OR_PROTOCOL_FAILURE
+        RemoteLookupFailure.PERSISTENCE_FAILURE ->
+            CallerDiagnosticStatus.PERSISTENCE_FAILURE
+        RemoteLookupFailure.CANCELLED -> CallerDiagnosticStatus.CANCELLED
+    }

@@ -58,11 +58,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var repository: CallerInfoRepository
     private lateinit var telegramManager: TelegramManager
+    private lateinit var callerDiagnostics: CallerDiagnosticTrail
     private lateinit var historyAdapter: HistoryAdapter
     private lateinit var gestureDetector: GestureDetectorCompat
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var latestLookupResult: CallerInfoEntity? = null
     private var updatingRecentCallSwitch = false
+    private var updatingCallerIdSwitch = false
+    private var enableAfterRoleRequest = false
     private val manualLookupGeneration = com.rakibulcodes.callerinfo.data.RequestGenerationTracker()
     private var manualLookupJob: Job? = null
     private var activeManualLookupGeneration: Long? = null
@@ -75,12 +78,17 @@ class MainActivity : AppCompatActivity() {
         scheduleBottomContentClearanceUpdate()
     }
 
-    private val roleRequestLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) {
-            Toast.makeText(this, "Call Screening role granted", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Call Screening role denied. Automatic Caller ID might not work on Android 10+.", Toast.LENGTH_LONG).show()
+    private val roleRequestLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val roleHeld = isCallerScreeningRoleHeld()
+        if (enableAfterRoleRequest) {
+            setCallerIdEnabled(roleHeld)
+            Toast.makeText(
+                this,
+                if (roleHeld) "Call Screening role granted" else "Call Screening role not granted. Caller ID remains off.",
+                if (roleHeld) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+            ).show()
         }
+        enableAfterRoleRequest = false
         refreshAppStatus()
     }
 
@@ -136,6 +144,7 @@ class MainActivity : AppCompatActivity() {
 
         repository = CallerInfoRepository.getInstance(applicationContext)
         telegramManager = TelegramManager.getInstance(applicationContext)
+        callerDiagnostics = CallerDiagnostics.getInstance(applicationContext)
         initializeUI()
         if (!telegramManager.isNativeAvailable()) {
             setLoginStatus(getString(R.string.native_integration_unavailable), isError = true)
@@ -261,6 +270,8 @@ class MainActivity : AppCompatActivity() {
             latestLookupResult?.let { startActivity(buildDialIntent(it.number)) }
         }
         binding.btnRefreshCaller.setOnClickListener {
+            callerDiagnostics.record(CallerDiagnosticEvent.MANUAL_FORCE_REFRESH_REQUESTED)
+            refreshCallerDiagnostics()
             val number = latestLookupResult?.number ?: binding.etLookupNumber.text?.toString().orEmpty()
             performLookup(number, showNotification = false, forceRefresh = true)
         }
@@ -530,7 +541,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyHistoryFilter() {
         if (!::historyAdapter.isInitialized) return
-        val visible = filterHistory(allHistoryItems, historyFilter, System.currentTimeMillis())
+        val visible = filterHistory(
+            allHistoryItems,
+            historyFilter,
+            System.currentTimeMillis(),
+            normalizeNumber = repository::sanitizeNumber
+        )
         if (visible.isEmpty()) {
             binding.emptyState.visibility = View.VISIBLE
             binding.rvHistory.visibility = View.GONE
@@ -821,9 +837,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.switchEnable.setOnCheckedChangeListener { _, isChecked ->
+            if (updatingCallerIdSwitch) return@setOnCheckedChangeListener
             if (isChecked) {
                 if (!telegramManager.isReady()) {
-                    binding.switchEnable.isChecked = false
+                    setCallerIdEnabled(false)
                     binding.bottomNavigation.selectedItemId = R.id.nav_settings
                     com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
                         .setTitle("Setup Required")
@@ -834,29 +851,36 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 if (!hasAllPermissions()) {
-                    binding.switchEnable.isChecked = false
+                    setCallerIdEnabled(false)
                     promptForPermissions()
                     return@setOnCheckedChangeListener
                 }
 
-                // Check for Call Screening Role on Android 10+
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val roleManager = getSystemService(RoleManager::class.java)
-                    if (roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true &&
-                        !roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)) {
-                        val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING)
-                        roleRequestLauncher.launch(intent)
-                    }
+                val decision = currentCallerIdRoleDecision(enableRequested = true)
+                if (decision.requestRole) {
+                    setCallerIdEnabled(false)
+                    enableAfterRoleRequest = true
+                    requestCallerScreeningRole()
+                    return@setOnCheckedChangeListener
+                }
+                if (!decision.enabled) {
+                    setCallerIdEnabled(false)
+                    Toast.makeText(this, "Call Screening is unavailable on this device.", Toast.LENGTH_LONG).show()
+                    return@setOnCheckedChangeListener
                 }
             }
-            prefs.edit().putBoolean("enabled", isChecked).apply()
-            updateStatusIndicator(isChecked)
-            
-            // Re-setup network listener if it was skipped due to missing permission
-            if (isChecked && networkCallback == null) {
-                setupNetworkListener()
-            }
+            setCallerIdEnabled(isChecked)
         }
+
+        binding.btnCopyCallerDiagnostics.setOnClickListener {
+            copyToClipboard(callerDiagnostics.summary())
+        }
+        binding.btnClearCallerDiagnostics.setOnClickListener {
+            callerDiagnostics.clear()
+            refreshCallerDiagnostics()
+            Toast.makeText(this, R.string.caller_diagnostics_cleared, Toast.LENGTH_SHORT).show()
+        }
+        refreshCallerDiagnostics()
 
         binding.switchLookupKnown.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("lookup_known", isChecked).apply()
@@ -1120,6 +1144,51 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun currentCallerIdRoleDecision(enableRequested: Boolean): CallerIdRoleDecision {
+        val roleRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val roleManager = if (roleRequired) getSystemService(RoleManager::class.java) else null
+        val roleAvailable = roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true
+        val roleHeld = roleAvailable && roleManager?.isRoleHeld(RoleManager.ROLE_CALL_SCREENING) == true
+        return callerIdRoleDecision(enableRequested, roleRequired, roleAvailable, roleHeld)
+    }
+
+    private fun isCallerScreeningRoleHeld(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        val roleManager = getSystemService(RoleManager::class.java) ?: return false
+        return roleManager.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) &&
+            roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)
+    }
+
+    private fun requestCallerScreeningRole() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val roleManager = getSystemService(RoleManager::class.java) ?: return
+        if (!roleManager.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING)) return
+        roleRequestLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING))
+    }
+
+    private fun setCallerIdEnabled(enabled: Boolean) {
+        getSharedPreferences("Settings", MODE_PRIVATE).edit().putBoolean("enabled", enabled).apply()
+        updatingCallerIdSwitch = true
+        binding.switchEnable.isChecked = enabled
+        updatingCallerIdSwitch = false
+        updateStatusIndicator(enabled)
+        if (enabled && networkCallback == null) setupNetworkListener()
+    }
+
+    private fun reconcileCallerIdRoleState() {
+        val prefs = getSharedPreferences("Settings", MODE_PRIVATE)
+        val persisted = prefs.getBoolean("enabled", false)
+        val reconciled = currentCallerIdRoleDecision(persisted).enabled
+        if (persisted != reconciled || binding.switchEnable.isChecked != reconciled) {
+            setCallerIdEnabled(reconciled)
+        }
+    }
+
+    private fun refreshCallerDiagnostics() {
+        if (!::binding.isInitialized || !::callerDiagnostics.isInitialized) return
+        binding.tvCallerDiagnostics.text = callerDiagnostics.summary(limit = 12)
+    }
+
     private fun refreshAppStatus() {
         if (!::binding.isInitialized) return
 
@@ -1196,15 +1265,8 @@ class MainActivity : AppCompatActivity() {
     private fun performStatusAction(item: AppStatusItem) {
         when (item.type) {
             AppStatusType.CALLER_SCREENING -> {
-                val roleManager = getSystemService(RoleManager::class.java)
-                if (
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                    roleManager?.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING) == true
-                ) {
-                    roleRequestLauncher.launch(
-                        roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING)
-                    )
-                }
+                enableAfterRoleRequest = false
+                requestCallerScreeningRole()
             }
             AppStatusType.OVERLAY -> requestOverlayPermission()
             AppStatusType.PHONE ->
@@ -1513,6 +1575,13 @@ class MainActivity : AppCompatActivity() {
 
         cancelManualLookup()
         val generation = manualLookupGeneration.begin()
+        if (forceRefresh) {
+            callerDiagnostics.record(
+                CallerDiagnosticEvent.MANUAL_GENERATION_CREATED,
+                generation = generation
+            )
+            refreshCallerDiagnostics()
+        }
         activeManualLookupGeneration = generation
         manualLookupJob = lifecycleScope.launch {
             try {
@@ -1553,6 +1622,7 @@ class MainActivity : AppCompatActivity() {
                     binding.btnLookup.isEnabled = true
                     manualLookupGeneration.invalidate(generation)
                     activeManualLookupGeneration = null
+                    refreshCallerDiagnostics()
                 }
             }
         }
@@ -1629,12 +1699,14 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         OfflineLookupScheduler.enqueue(applicationContext)
         if (::binding.isInitialized) {
+            reconcileCallerIdRoleState()
             checkPermissions()
             val prefs = getSharedPreferences("Settings", MODE_PRIVATE)
             val isEnabled = prefs.getBoolean("enabled", false)
             updateStatusIndicator(isEnabled)
             refreshAppStatus()
             refreshPendingLookupStatus()
+            refreshCallerDiagnostics()
         }
     }
 
